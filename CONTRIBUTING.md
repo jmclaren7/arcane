@@ -17,8 +17,27 @@ Thanks for helping make Arcane better! We've built a modern, streamlined develop
 
 ### Prerequisites
 
-- **Docker & Docker Compose** (that's it! 🎉)
+**Required**
+
+- **Docker & Docker Compose** — runs the full dev stack via `./scripts/development/dev.sh start`
 - **VS Code** based IDE (recommended for the best developer experience)
+
+**Optional — host tools for the Justfile shortcuts**
+
+The `Justfile` recipes (`just lint`, `just test`, `just format`, etc.) run on your host, not inside the dev containers. You only need these if you want to use them; otherwise stick to `./scripts/development/dev.sh` and the [Manual Commands](#manual-commands) examples below.
+
+- [`just`](https://github.com/casey/just) — recipe runner
+- [`pnpm`](https://pnpm.io/) (or Node 25+ with `corepack enable`) — frontend tooling
+- [Go](https://go.dev/dl/) 1.26+ — backend, CLI, and types modules
+- [`golangci-lint`](https://golangci-lint.run/) — Go linter used by `just lint backend|cli|types`
+
+On Windows (via [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/)):
+
+```powershell
+winget install Casey.Just.Just pnpm.pnpm GoLang.Go golangci-lint.golangci-lint Git.Git
+```
+
+(`Git.Git` puts `bash` on PATH — the Justfile recipes use `#!/usr/bin/env bash`.)
 
 > **💡 Working Directory**: Unless otherwise specified, all commands in this guide should be run from the project root directory (`arcane/`).
 
@@ -122,7 +141,7 @@ Press `Ctrl/Cmd+Shift+B` to run the default build task (Start Environment).
 
 ### Justfile Shortcuts
 
-We provide a categorized `Justfile` for common workflows. Run `just --list` to see every category and target.
+We provide a categorized `Justfile` for common workflows. Run `just --list` to see every category and target. These recipes execute on your host (not inside the dev containers), so they need the optional tools listed in [Prerequisites](#prerequisites). `just dev docker` / `just dev logs` work with Docker alone.
 
 ```bash
 # Development
@@ -200,16 +219,42 @@ Both services include development-time linting and formatting:
 
 ### Manual Commands
 
-If you need to run checks manually:
+If you need to run checks manually, you have three options. Pick whichever fits.
+
+**1. Justfile (runs on the host — needs the optional tools from [Prerequisites](#prerequisites))**
 
 ```bash
-# Frontend checks
-docker compose -f docker/compose.dev.yaml exec frontend pnpm check
-docker compose -f docker/compose.dev.yaml exec frontend pnpm format
+just lint frontend        # svelte-check / TypeScript check
+just lint backend         # golangci-lint on the backend module
+just lint all             # frontend + backend + cli + types
+just format all           # write formatting fixes
+just format all --check   # verify formatting without writing
+```
 
-# Backend checks
-docker compose -f docker/compose.dev.yaml exec backend go fmt ./...
-docker compose -f docker/compose.dev.yaml exec backend go vet ./...
+**2. Shell into the dev container** (recommended if you only have Docker installed)
+
+```bash
+./scripts/development/dev.sh shell frontend
+# inside the container:
+pnpm -C frontend check
+pnpm -C frontend format
+
+./scripts/development/dev.sh shell backend
+# inside the container:
+go fmt ./...
+go vet ./...
+```
+
+**3. One-shot `docker compose exec`**
+
+The dev stack runs under Compose project `arcane-dev` (set by `dev.sh`), so you must pass `-p arcane-dev` or Compose won't find the running services. The frontend's `check`/`format` scripts live in `frontend/package.json`, so run them with `pnpm -C frontend`:
+
+```bash
+docker compose -f docker/compose.dev.yaml -p arcane-dev exec frontend pnpm -C frontend check
+docker compose -f docker/compose.dev.yaml -p arcane-dev exec frontend pnpm -C frontend format
+
+docker compose -f docker/compose.dev.yaml -p arcane-dev exec backend go fmt ./...
+docker compose -f docker/compose.dev.yaml -p arcane-dev exec backend go vet ./...
 ```
 
 ## 📝 Commit Guidelines

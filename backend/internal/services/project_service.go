@@ -1572,10 +1572,13 @@ func (s *ProjectService) upsertProjectForDir(ctx context.Context, dirName, dirPa
 	serviceCount, composeProjectName, serviceCountErr := s.loadComposeMetadataForSyncInternal(ctx, dirPath, dirName)
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		// Create a minimal project entry
+		// Create a minimal project entry. The Name must satisfy the same charset
+		// the editor enforces ([A-Za-z0-9_-]) — otherwise the project becomes
+		// uneditable from the UI. The raw dirName is preserved in DirName/Path.
+		projectName := projects.SanitizeProjectName(dirName)
 		reason := "Project discovered from filesystem, status pending Docker service query"
 		proj := &models.Project{
-			Name:               dirName,
+			Name:               projectName,
 			DirName:            new(dirName),
 			Path:               dirPath,
 			Status:             models.ProjectStatusUnknown,
@@ -1585,7 +1588,8 @@ func (s *ProjectService) upsertProjectForDir(ctx context.Context, dirName, dirPa
 			ComposeProjectName: composeProjectName,
 		}
 		slog.InfoContext(ctx, "Discovered new project with unknown status",
-			"project", dirName,
+			"project", projectName,
+			"dir", dirName,
 			"path", dirPath,
 			"reason", reason)
 		if serviceCountErr != nil {
@@ -1606,6 +1610,16 @@ func (s *ProjectService) upsertProjectForDir(ctx context.Context, dirName, dirPa
 	}
 	if existing.DirName == nil || *existing.DirName != dirName {
 		updates["dir_name"] = dirName
+	}
+	// Self-heal rows from older versions where Name was seeded directly from
+	// dirName and may contain characters the editor's name field rejects
+	// (e.g. '.'), which made those projects silently uneditable.
+	if sanitized := projects.SanitizeProjectName(existing.Name); sanitized != existing.Name {
+		updates["name"] = sanitized
+		slog.InfoContext(ctx, "Sanitized discovered project name",
+			"projectID", existing.ID,
+			"oldName", existing.Name,
+			"newName", sanitized)
 	}
 	if serviceCountErr == nil && existing.ServiceCount != serviceCount {
 		updates["service_count"] = serviceCount

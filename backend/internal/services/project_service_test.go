@@ -4081,6 +4081,59 @@ func TestProjectService_SyncProjectsFromFileSystem_RefreshesServiceCountOnCompos
 	assert.Equal(t, 2, project.ServiceCount)
 }
 
+func TestProjectService_SyncProjectsFromFileSystem_SanitizesDirNameWithDot(t *testing.T) {
+	db := setupProjectTestDB(t)
+	ctx := context.Background()
+
+	settingsService, err := NewSettingsService(ctx, db)
+	require.NoError(t, err)
+
+	projectsRoot := t.TempDir()
+	projectPath := createComposeProjectDir(t, projectsRoot, "my.project")
+
+	require.NoError(t, settingsService.SetStringSetting(ctx, "projectsDirectory", projectsRoot))
+
+	svc := NewProjectService(db, settingsService, nil, nil, nil, nil, config.Load())
+	require.NoError(t, svc.SyncProjectsFromFileSystem(ctx))
+
+	var project models.Project
+	require.NoError(t, db.WithContext(ctx).Where("path = ?", projectPath).First(&project).Error)
+	assert.Equal(t, "my_project", project.Name, "Name must satisfy [A-Za-z0-9_-] so the editor can save it")
+	require.NotNil(t, project.DirName)
+	assert.Equal(t, "my.project", *project.DirName, "DirName must preserve the on-disk folder name")
+}
+
+func TestProjectService_SyncProjectsFromFileSystem_HealsExistingInvalidName(t *testing.T) {
+	db := setupProjectTestDB(t)
+	ctx := context.Background()
+
+	settingsService, err := NewSettingsService(ctx, db)
+	require.NoError(t, err)
+
+	projectsRoot := t.TempDir()
+	projectPath := createComposeProjectDir(t, projectsRoot, "my.project")
+
+	// Simulate a project row created by a pre-fix version where Name was seeded
+	// from the raw dirName and contains characters the editor rejects.
+	legacyProject := &models.Project{
+		BaseModel: models.BaseModel{ID: "proj-legacy-dot"},
+		Name:      "my.project",
+		DirName:   ptr("my.project"),
+		Path:      projectPath,
+		Status:    models.ProjectStatusUnknown,
+	}
+	require.NoError(t, db.Create(legacyProject).Error)
+
+	require.NoError(t, settingsService.SetStringSetting(ctx, "projectsDirectory", projectsRoot))
+
+	svc := NewProjectService(db, settingsService, nil, nil, nil, nil, config.Load())
+	require.NoError(t, svc.SyncProjectsFromFileSystem(ctx))
+
+	var project models.Project
+	require.NoError(t, db.WithContext(ctx).Where("id = ?", "proj-legacy-dot").First(&project).Error)
+	assert.Equal(t, "my_project", project.Name, "Existing rows with invalid names must self-heal on sync")
+}
+
 func TestProjectService_SyncProjectsFromFileSystem_PreservesGitOpsProjectWithCustomComposeFilename(t *testing.T) {
 	db := setupProjectTestDB(t)
 	ctx := context.Background()

@@ -4,10 +4,12 @@
 .gitignore
 
 # Build artifacts
-node_modules
+**/node_modules
 .pnpm-store
 build
+**/build
 .svelte-kit
+**/.svelte-kit
 coverage
 .coverage
 .nyc_output

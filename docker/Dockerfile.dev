@@ -3,6 +3,15 @@
 # Stage 1: Frontend Development with optimized caching
 FROM --platform=$BUILDPLATFORM node:26-trixie-slim AS frontend-dev
 
+# svelte-check-rs (used by `pnpm check`) shells out to Bun at runtime and
+# tries to auto-install it if missing. The slim image lacks curl/unzip, so
+# that auto-install fails. Install Bun and its prerequisites up front.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl unzip && \
+    rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL https://bun.sh/install | bash && \
+    ln -sf /root/.bun/bin/bun /usr/local/bin/bun
+
 RUN npm install -g --force corepack && corepack enable pnpm
 
 ENV PNPM_HOME="/pnpm"

@@ -22,8 +22,8 @@ When you rebase, work through every entry below. For each one:
 
 ## Active changes
 
-### 1. Sanitise discovered project names
-- **Type:** backend bug fix (+ tests)
+### 1. Sanitize discovered project names
+
 - **Files:** `backend/internal/services/project_service.go`,
   `backend/internal/services/project_service_test.go`
 - **What:** In `upsertProjectForDir`, set the new project's `Name` to
@@ -46,7 +46,7 @@ When you rebase, work through every entry below. For each one:
 - **Verify:** `go test ./internal/services/ -run 'TestProjectService_SyncProjectsFromFileSystem_(SanitizesDirNameWithDot|HealsExistingInvalidName)'`
 
 ### 2. Set background early to prevent white flash
-- **Type:** frontend UX fix
+
 - **Files:** `frontend/src/app.html`
 - **What:** Inject an inline `<style>` (light/dark `html` background +
   `color-scheme`) and a small bootstrap `<script>` that reads the persisted
@@ -63,7 +63,7 @@ When you rebase, work through every entry below. For each one:
   handling — **keep**.
 
 ### 3. Preinstall Bun in the dev Dockerfile
-- **Type:** dev container fix
+
 - **Files:** `docker/Dockerfile.dev`
 - **What:** In the `frontend-dev` stage, `apt-get install ca-certificates curl
   unzip`, install Bun, and symlink it to `/usr/local/bin/bun`.
@@ -77,7 +77,7 @@ When you rebase, work through every entry below. For each one:
   `frontend/package.json` and upstream's dev image still omits Bun — **keep**.
 
 ### 4. Exclude nested build artifacts from the Docker build context
-- **Type:** build fix
+
 - **Files:** `.dockerignore`
 - **What:** Add recursive `**/node_modules`, `**/build`, `**/.svelte-kit`
   alongside the existing top-level entries.
@@ -87,30 +87,17 @@ When you rebase, work through every entry below. For each one:
   **keep**.
 
 ### 5. Keep LF line endings for scripts
-- **Type:** build/portability fix
+
 - **Files:** `.gitattributes` (new file)
 - **What:** Force `eol=lf` for `*.sh`, `*.bash`, and `Dockerfile`.
 - **Why:** Git on Windows (`autocrlf`) rewrites them to CRLF, which breaks the
   scripts and Docker build.
 - **Redundancy check:** Upstream has no `.gitattributes` — **keep**.
 
-### 6. Expand contributor docs
-- **Type:** docs
-- **Files:** `CONTRIBUTING.md`
-- **What:** Add a Required/Optional prerequisites section (Docker, VS Code,
-  optional host tools: just, pnpm, Go 1.26+, golangci-lint) with a Windows
-  winget example, clarify that Justfile recipes run on the host, and expand the
-  Manual Commands section (Justfile / shell into dev container / one-shot
-  `docker compose exec`).
-- **Re-apply notes:** Upstream had not touched `CONTRIBUTING.md` since the
-  previous rebase base; re-check `git diff <base> upstream/main -- CONTRIBUTING.md`
-  and reconcile if upstream has since edited it.
-- **Redundancy check:** **keep** (fork-specific dev workflow notes).
+### 6. CI/workflows adapted for this fork
 
-### 7. CI/workflows adapted for this fork
-- **Type:** CI
 - **Files:** `.github/workflows/ci.yml`, `.github/workflows/build-next-images.yml`
-- **What / intent:** Make CI run on a fork without upstream-only
+- **Intent:** Make CI run on a fork without upstream-only
   infrastructure:
   - Run on the `jcs-next` branch (CI on push/PR; next images on push to
     `jcs-next`).
@@ -139,14 +126,6 @@ When you rebase, work through every entry below. For each one:
   fork adaptation is still required. **keep.**
 - **Out of scope:** `build-pr-images.yml` and `release.yml` are left at
   upstream — the fork has never customised them.
-
-### 8. Fork README section
-- **Type:** docs
-- **Files:** `README.md`
-- **What:** A blockquoted "About this fork" section prepended above the
-  upstream README, pointing here for the detailed change list.
-- **Re-apply notes:** Re-prepend after a rebase if upstream rewrote the README
-  header. Keep it short; this file is the source of truth for the change list.
 
 ---
 

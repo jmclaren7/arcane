@@ -62,9 +62,11 @@
 	let isLoading = $state({
 		removing: false
 	});
-	// Tracks which sync row is currently running so the spinner and disabled
-	// state are per-row instead of a single table-wide flag.
-	let syncingId = $state<string | null>(null);
+	// Tracks which sync rows are currently running. Each row shows its own
+	// spinner (in the status column) and disables only its own action, so
+	// independent syncs can run at once — matching the per-sync-ID coalescing
+	// the backend already enforces.
+	let syncingIds = $state<string[]>([]);
 	let mobileFieldVisibility = $state<Record<string, boolean>>({});
 	let backupHistoryOpen = $state(false);
 	let backupResolveOpen = $state(false);
@@ -187,8 +189,8 @@
 	}
 
 	async function handlePerformSync(sync: GitOpsSync) {
-		if (syncingId) return;
-		syncingId = sync.id;
+		if (syncingIds.includes(sync.id)) return;
+		syncingIds = [...syncingIds, sync.id];
 		const result = await tryCatch(gitOpsSyncService.performSync(environmentId, sync.id));
 		await handleApiResultWithCallbacks({
 			result,
@@ -210,7 +212,7 @@
 				await reloadSyncs();
 			}
 		});
-		syncingId = null;
+		syncingIds = syncingIds.filter((syncId) => syncId !== sync.id);
 	}
 
 	const columns = [
@@ -351,7 +353,12 @@
 {/snippet}
 
 {#snippet StatusCell({ value, item }: { value: any; item: GitOpsSync; row: ArcaneRow<GitOpsSync> })}
-	{#if isBackup(item)}
+	{#if syncingIds.includes(item.id)}
+		<span class="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+			<RefreshCwIcon class="size-3.5 animate-spin" />
+			{m.common_syncing()}
+		</span>
+	{:else if isBackup(item)}
 		<BackupStateBadge sync={item} />
 	{:else if value === 'success'}
 		<Badge variant="green" minWidth="20">{m.common_success()}</Badge>
@@ -468,12 +475,8 @@
 {#snippet RowActions({ item }: { item: GitOpsSync })}
 	<RowActionsMenu>
 		{#if isBackup(item)}
-			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={syncingId !== null || !canRunBackup}>
-				{#if syncingId === item.id}
-					<RefreshCwIcon class="size-4 animate-spin" />
-				{:else}
-					<UploadIcon class="size-4" />
-				{/if}
+			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={syncingIds.includes(item.id) || !canRunBackup}>
+				<UploadIcon class="size-4" />
 				{m.back_up_now()}
 			</DropdownMenu.Item>
 
@@ -502,12 +505,8 @@
 				/>
 			{/if}
 		{:else}
-			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={syncingId !== null}>
-				{#if syncingId === item.id}
-					<RefreshCwIcon class="size-4 animate-spin" />
-				{:else}
-					<PlayIcon class="size-4" />
-				{/if}
+			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={syncingIds.includes(item.id)}>
+				<PlayIcon class="size-4" />
 				{m.pull_from_git()}
 			</DropdownMenu.Item>
 

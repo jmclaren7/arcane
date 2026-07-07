@@ -142,6 +142,96 @@ When you rebase, work through every entry below. For each one:
 - **Out of scope:** `build-pr-images.yml` and `release.yml` are left at
   upstream — the fork has never customised them.
 
+### 7. GitOps manual sync: honest feedback and per-row spinner
+
+- **Files:** `frontend/src/routes/(app)/environments/[id]/gitops/sync-table.svelte`
+- **What:** "Sync Now" now reads `result.success` from the response body rather
+  than treating any 2xx as a completed sync — an overlapping run is coalesced
+  server-side and returns `success=false`. The UI shows `toast.success` (with
+  the server's message as a description) only when the sync actually applied and
+  `toast.warning` with the server message otherwise. Loading state is tracked
+  per row as a set of running ids (`syncingIds`); each running row shows a
+  spinner + "Syncing…" in its status column and disables only its own action, so
+  independent syncs run concurrently.
+- **Why:** Upstream fires a blanket `toast.success` on any 2xx and gates a
+  single table-wide `isLoading.syncing` flag, so a coalesced/no-op sync falsely
+  reports success and there is no visible per-row progress.
+- **Re-apply notes:** Anchors on `handlePerformSync`, the `isLoading` /
+  `syncingIds` state, the `StatusCell` snippet, and the `RowActions`
+  `DropdownMenu.Item`. The `onSuccess(data)` callback depends on
+  `handleApiResultWithCallbacks` passing the parsed response body. Depends on
+  message keys `common_syncing`, `git_sync_success`, `git_sync_failed`
+  (`frontend/messages/en.json`). Keep in step with change #8's backend
+  coalescing that returns `success=false` for an overlapping run. The spinner
+  belongs in the status column, **not** in the `DropdownMenu.Item` (the menu
+  closes on select, so a spinner there is never seen).
+- **Redundancy check:** Upstream `sync-table.svelte` still toasts success on any
+  2xx and uses the single `isLoading.syncing` flag with no status-column spinner
+  — **keep**.
+
+### 8. Shallow, tag-less GitOps clones and ls-remote connection test
+
+- **Files:** `backend/pkg/gitutil/git.go`
+- **What:** `Client.Clone` sets `Depth: 1` and `Tags: git.NoTags`, so GitOps
+  fetches only the working tree at the branch tip instead of full history and
+  tags. `Client.TestConnection` proves reachability and credentials with an
+  in-memory `listRemoteReferences` (ls-remote) instead of a full
+  clone-and-delete, still verifying the branch exists among the remote refs when
+  a branch is set.
+- **Why:** Full-history clones were the dominant cost of every sync (and of each
+  browse / build-context clone) and grew with repo age; "Test Connection" cloned
+  the entire repository only to delete it.
+- **Re-apply notes:** `Depth`/`Tags` are added to the `cloneOptions` literal in
+  `Clone`; `TestConnection` is rewritten to call `listRemoteReferences` and match
+  `plumbing.NewBranchReferenceName(branch)`, returning a `branch %q not found`
+  error otherwise. Confirm `listRemoteReferences` still exists in `git.go` before
+  re-applying. Caveat: a shallow, tag-less clone means any caller that relies on
+  commit history or tags being present in the clone would break — none currently
+  do.
+- **Redundancy check:** Upstream `Clone` still does a full clone (no `Depth` /
+  `Tags`) and `TestConnection` still clones-and-deletes — **keep**.
+
+### 9. Short commit hash display with full hash on hover
+
+- **Files:** `frontend/src/lib/utils/navigation.ts`,
+  `frontend/src/routes/(app)/environments/[id]/gitops/sync-table.svelte`,
+  `frontend/src/routes/(app)/projects/[projectId]/+page.svelte`
+- **What:** Add a `shortenGitCommit` helper (and `SHORT_GIT_COMMIT_LENGTH = 7`)
+  beside `toGitCommitUrl`. Everywhere a GitOps commit hash is shown — the sync
+  table `CommitCell`, the project header, and the read-only git-managed alert —
+  render the abbreviated hash with the full hash in a `title` tooltip. The commit
+  link's `href` still uses the full hash so it resolves.
+- **Why:** Full 40-character hashes are noisy in the UI; the short form reads
+  better while the full value stays available on hover and in the link.
+- **Re-apply notes:** The helper is appended to `navigation.ts` after
+  `toGitCommitUrl`. Each display site derives `{@const shortCommit = ...}`,
+  renders `shortCommit`, and adds `title={fullCommit}` (the sync table) or
+  `title={project.lastSyncCommit}` (the project page). Keep every commit-link
+  `href` on the full hash. Shares `sync-table.svelte` with change #7 — apply
+  both when re-doing that file.
+- **Redundancy check:** Upstream renders the raw full hash with no short form or
+  `title` — **keep**.
+
+### 10. Hide the copy button when the Clipboard API is unavailable
+
+- **Files:** `frontend/src/lib/components/ui/copy-button/copy-button.svelte`
+- **What:** Replace the `isSecure` gate (which rendered a disabled button with an
+  "HTTPS required" tooltip) with a `canCopy` check
+  (`typeof navigator !== 'undefined' && !!navigator.clipboard`) that hides the
+  button entirely when the Clipboard API is unavailable — typically an insecure /
+  non-HTTPS context. Removes the `{:else}` tooltip branch and its `Tooltip`
+  import.
+- **Why:** The Clipboard API is only exposed in secure contexts, so on insecure
+  connections copying silently fails; offering a disabled button is confusing —
+  better not to present an action that cannot work.
+- **Re-apply notes:** `onMount` sets `canCopy`; the `{#if canCopy}` wraps the
+  single `ArcaneButton` and the disabled-button + `Tooltip` fallback is deleted.
+  The `common_copy_https_required` message key is now unused by this component
+  but is **still shipped upstream** (`frontend/messages/en.json`) — leave the key
+  in place, don't prune it.
+- **Redundancy check:** Upstream `copy-button.svelte` still renders the
+  disabled-button-with-tooltip fallback keyed on `isSecure` — **keep**.
+
 ---
 
 ## Dropped / now upstream

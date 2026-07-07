@@ -230,3 +230,14 @@ export function toGitRouteUrl(repositoryUrl: string, route: GitRoute, ref: strin
 		return null;
 	}
 }
+
+/** The default length of an abbreviated git commit hash. */
+export const SHORT_GIT_COMMIT_LENGTH = 7;
+
+/** Returns the abbreviated (short) form of a git commit hash for display.
+ * The full hash should still be used for links and shown on hover. */
+export function shortenGitCommit(commit: string, length: number = SHORT_GIT_COMMIT_LENGTH): string {
+	const trimmed = commit.trim();
+	if (trimmed.length <= length) return trimmed;
+	return trimmed.slice(0, length);
+}

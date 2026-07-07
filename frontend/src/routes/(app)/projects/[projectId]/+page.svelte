@@ -72,7 +72,7 @@
 	import { getStatusVariant, getThemedIconUrl } from '#lib/utils/docker.js';
 	import { capitalizeFirstLetter } from '#lib/utils/formatting.js';
 	import { gitOpsComposeEditUrl, gitOpsFileEditUrl, gitOpsProjectUrl } from '#lib/utils/gitops.js';
-	import { toGitRouteUrl, toSafeHref } from '#lib/utils/navigation.js';
+	import { shortenGitCommit, toGitRouteUrl, toSafeHref } from '#lib/utils/navigation.js';
 	import { createForm } from '#lib/utils/settings.svelte.js';
 	import { globalVariablesToMap } from '#lib/utils/template-load.js';
 	import { tryCatch } from '#lib/utils/try-catch.js';
@@ -2192,6 +2192,7 @@
 				{@const commitUrl = project.gitRepositoryURL
 					? toGitRouteUrl(project.gitRepositoryURL, 'commit', project.lastSyncCommit)
 					: null}
+				{@const shortCommit = shortenGitCommit(project.lastSyncCommit)}
 				<div class="mt-1 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
 					<div class="flex items-center gap-1.5">
 						<span class="hidden sm:inline">{m.commit()}:</span>
@@ -2199,13 +2200,14 @@
 							<a
 								href={commitUrl}
 								target="_blank"
+								title={project.lastSyncCommit}
 								class="font-mono transition-colors hover:text-primary sm:rounded sm:bg-muted sm:px-1.5 sm:py-0.5"
 							>
-								{project.lastSyncCommit}
+								{shortCommit}
 							</a>
 						{:else}
-							<span class="font-mono sm:rounded sm:bg-muted sm:px-1.5 sm:py-0.5">
-								{project.lastSyncCommit}
+							<span title={project.lastSyncCommit} class="font-mono sm:rounded sm:bg-muted sm:px-1.5 sm:py-0.5">
+								{shortCommit}
 							</span>
 						{/if}
 					</div>

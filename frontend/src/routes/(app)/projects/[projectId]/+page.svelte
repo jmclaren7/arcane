@@ -35,7 +35,7 @@
 	import { z } from 'zod/v4';
 	import { createForm } from '$lib/utils/settings';
 	import { m } from '$lib/paraglide/messages';
-	import { toGitCommitUrl } from '$lib/utils/navigation';
+	import { toGitCommitUrl, shortenGitCommit } from '$lib/utils/navigation';
 	import { toSafeHref } from '$lib/utils/navigation';
 	import { PersistedState } from 'runed';
 	import ComposeFileEditorPanel from '$lib/components/compose-file-editor-panel.svelte';
@@ -1375,6 +1375,7 @@
 						{@const commitUrl = project.gitRepositoryURL
 							? toGitCommitUrl(project.gitRepositoryURL, project.lastSyncCommit)
 							: null}
+						{@const shortCommit = shortenGitCommit(project.lastSyncCommit)}
 						<div class="text-muted-foreground mt-1 flex flex-wrap items-center gap-4 text-xs">
 							<div class="flex items-center gap-1.5">
 								<span class="hidden sm:inline">{m.git_sync_commit()}:</span>
@@ -1382,13 +1383,14 @@
 									<a
 										href={commitUrl}
 										target="_blank"
+										title={project.lastSyncCommit}
 										class="hover:text-primary sm:bg-muted font-mono transition-colors sm:rounded sm:px-1.5 sm:py-0.5"
 									>
-										{project.lastSyncCommit}
+										{shortCommit}
 									</a>
 								{:else}
-									<span class="sm:bg-muted font-mono sm:rounded sm:px-1.5 sm:py-0.5">
-										{project.lastSyncCommit}
+									<span title={project.lastSyncCommit} class="sm:bg-muted font-mono sm:rounded sm:px-1.5 sm:py-0.5">
+										{shortCommit}
 									</span>
 								{/if}
 							</div>
@@ -1468,18 +1470,20 @@
 												{@const commitUrl = project.gitRepositoryURL
 													? toGitCommitUrl(project.gitRepositoryURL, project.lastSyncCommit)
 													: null}
+												{@const shortCommit = shortenGitCommit(project.lastSyncCommit)}
 												<div class="flex items-center gap-1.5 font-mono text-xs">
 													<span class="text-muted-foreground">{m.git_sync_commit()}:</span>
 													{#if commitUrl}
 														<a
 															href={commitUrl}
 															target="_blank"
+															title={project.lastSyncCommit}
 															class="bg-muted hover:text-primary rounded px-1.5 py-0.5 transition-colors"
 														>
-															{project.lastSyncCommit}
+															{shortCommit}
 														</a>
 													{:else}
-														<span class="bg-muted rounded px-1.5 py-0.5">{project.lastSyncCommit}</span>
+														<span title={project.lastSyncCommit} class="bg-muted rounded px-1.5 py-0.5">{shortCommit}</span>
 													{/if}
 												</div>
 											{/if}

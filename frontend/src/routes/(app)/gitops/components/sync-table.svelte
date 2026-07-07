@@ -43,7 +43,7 @@
 	import { bulkConfirmAndRun, confirmAndRun } from '#lib/utils/bulk-actions.js';
 	import { rowKey, type EnvironmentPage, type EnvironmentRow } from '#lib/utils/environments.js';
 	import { formatDateTimeShort } from '#lib/utils/formatting.js';
-	import { toGitRouteUrl } from '#lib/utils/navigation.js';
+	import { shortenGitCommit, toGitRouteUrl } from '#lib/utils/navigation.js';
 	import { tryCatch } from '#lib/utils/try-catch.js';
 
 	type FieldVisibility = Record<string, boolean>;
@@ -396,6 +396,7 @@
 
 {#snippet CommitCell({ item }: { item: SyncRow })}
 	{#if item.lastSyncCommit}
+		{@const shortCommit = shortenGitCommit(item.lastSyncCommit)}
 		{@const commitUrl = item.repository?.url
 			? toGitRouteUrl(item.repository.url, 'commit', item.lastSyncCommit, '', item.repository.provider)
 			: null}
@@ -406,13 +407,17 @@
 					href={commitUrl}
 					target="_blank"
 					rel="external"
+					title={item.lastSyncCommit}
 					class="min-w-0 truncate rounded-xl bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:text-primary"
 				>
-					{item.lastSyncCommit}
+					{shortCommit}
 				</a>
 			{:else}
-				<code class="min-w-0 truncate rounded-xl bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
-					{item.lastSyncCommit}
+				<code
+					title={item.lastSyncCommit}
+					class="min-w-0 truncate rounded-xl bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground"
+				>
+					{shortCommit}
 				</code>
 			{/if}
 		</div>

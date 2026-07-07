@@ -44,9 +44,11 @@
 	} = $props();
 
 	let isLoading = $state({
-		removing: false,
-		syncing: false
+		removing: false
 	});
+	// Tracks which sync row is currently running so the spinner and disabled
+	// state are per-row instead of a single table-wide flag.
+	let syncingId = $state<string | null>(null);
 	let mobileFieldVisibility = $state<Record<string, boolean>>({});
 
 	function getProjectDetailsUrl(projectId: string): string {
@@ -104,20 +106,29 @@
 	}
 
 	async function handlePerformSync(id: string, _name: string) {
-		isLoading.syncing = true;
+		if (syncingId) return;
+		syncingId = id;
 		const result = await tryCatch(gitOpsSyncService.performSync(environmentId, id));
 		handleApiResultWithCallbacks({
 			result,
 			message: m.git_sync_failed(),
 			setLoadingState: () => {},
-			onSuccess: () => {
-				toast.success(m.git_sync_success());
+			onSuccess: (data) => {
+				// A 2xx response doesn't mean the sync ran: an overlapping run is
+				// coalesced server-side and comes back with success=false. Only claim
+				// success when it actually applied, and surface the server's message
+				// either way instead of a blanket "completed successfully".
+				if (data?.success) {
+					toast.success(m.git_sync_success(), data.message ? { description: data.message } : undefined);
+				} else {
+					toast.warning(data?.message || m.git_sync_failed());
+				}
 				gitOpsSyncService.getSyncs(environmentId, requestOptions).then((newSyncs) => {
 					syncs = newSyncs;
 				});
 			}
 		});
-		isLoading.syncing = false;
+		syncingId = null;
 	}
 
 	const columns = [
@@ -293,8 +304,12 @@
 
 {#snippet RowActions({ item }: { item: GitOpsSync })}
 	<RowActionsMenu>
-		<DropdownMenu.Item onclick={() => handlePerformSync(item.id, item.name)} disabled={isLoading.syncing}>
-			<PlayIcon class="size-4" />
+		<DropdownMenu.Item onclick={() => handlePerformSync(item.id, item.name)} disabled={syncingId !== null}>
+			{#if syncingId === item.id}
+				<RefreshCwIcon class="size-4 animate-spin" />
+			{:else}
+				<PlayIcon class="size-4" />
+			{/if}
 			{m.git_sync_perform()}
 		</DropdownMenu.Item>
 

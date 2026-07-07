@@ -35,7 +35,7 @@
 	import { hasPermission } from '#lib/utils/auth.js';
 	import { bulkConfirmAndRun, confirmAndRun } from '#lib/utils/bulk-actions.js';
 	import { formatDateTimeShort } from '#lib/utils/formatting.js';
-	import { toGitRouteUrl } from '#lib/utils/navigation.js';
+	import { shortenGitCommit, toGitRouteUrl } from '#lib/utils/navigation.js';
 	import { tryCatch } from '#lib/utils/try-catch.js';
 
 	type FieldVisibility = Record<string, boolean>;
@@ -352,20 +352,23 @@
 
 {#snippet CommitCell({ value, item }: { value: any; item: GitOpsSync; row: ArcaneRow<GitOpsSync> })}
 	{#if value}
-		{@const commitUrl = item.repository?.url ? toGitRouteUrl(item.repository.url, 'commit', String(value)) : null}
+		{@const fullCommit = String(value)}
+		{@const shortCommit = shortenGitCommit(fullCommit)}
+		{@const commitUrl = item.repository?.url ? toGitRouteUrl(item.repository.url, 'commit', fullCommit) : null}
 		<div class="flex items-center gap-1.5">
 			<HashIcon class="size-3.5 text-muted-foreground" />
 			{#if commitUrl}
 				<a
 					href={commitUrl}
 					target="_blank"
+					title={fullCommit}
 					class="rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:text-primary"
 				>
-					{value}
+					{shortCommit}
 				</a>
 			{:else}
-				<code class="rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
-					{value}
+				<code title={fullCommit} class="rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
+					{shortCommit}
 				</code>
 			{/if}
 		</div>

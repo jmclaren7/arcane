@@ -72,9 +72,13 @@
 	const canResolve = (sync: SyncRow) => (sync.mode === 'bidirectional' ? canRunPush(sync) : canPush(sync));
 
 	const isLoading = $state({
-		removing: false,
-		syncing: false
+		removing: false
 	});
+	// Tracks which sync rows are currently running. Each row shows its own
+	// spinner (in the status column) and disables only its own action, so
+	// independent syncs can run at once — matching the per-sync-ID coalescing
+	// the backend already enforces.
+	let syncingIds = $state<string[]>([]);
 	let mobileFieldVisibility = $state<Record<string, boolean>>({});
 	let backupHistoryOpen = $state(false);
 	let backupResolveOpen = $state(false);
@@ -225,18 +229,26 @@
 	}
 
 	async function handlePerformSync(sync: SyncRow) {
-		isLoading.syncing = true;
+		if (syncingIds.includes(sync.id)) return;
+		syncingIds = [...syncingIds, sync.id];
 		const result = await tryCatch(gitOpsSyncService.performSync(sync.environmentId, sync.id));
 		await handleApiResultWithCallbacks({
 			result,
 			message: isBackup(sync) ? m.backup_failed() : m.git_sync_failed(),
 			setLoadingState: () => {},
 			onSuccess: async (data) => {
-				toast.success(successMessage(sync, data.message));
+				// Only claim success when the run reports it applied, and surface the
+				// server's message either way instead of a blanket "completed successfully".
+				if (data?.success) {
+					const description = sync.mode !== 'bidirectional' && data.message ? { description: data.message } : undefined;
+					toast.success(successMessage(sync, data.message), description);
+				} else {
+					toast.warning(data?.message || (isBackup(sync) ? m.backup_failed() : m.git_sync_failed()));
+				}
 				await invalidateSyncs();
 			}
 		});
-		isLoading.syncing = false;
+		syncingIds = syncingIds.filter((syncId) => syncId !== sync.id);
 	}
 
 	const columns = $derived([
@@ -381,7 +393,12 @@
 {/snippet}
 
 {#snippet StatusCell({ item }: { item: SyncRow })}
-	{#if pushesToGit(item)}
+	{#if syncingIds.includes(item.id)}
+		<span class="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+			<RefreshCwIcon class="size-3.5 animate-spin" />
+			{m.common_syncing()}
+		</span>
+	{:else if pushesToGit(item)}
 		<BackupStateBadge sync={item} />
 	{:else if item.lastSyncStatus === 'success'}
 		<Badge variant="green" minWidth="20">{m.common_success()}</Badge>
@@ -503,7 +520,7 @@
 {#snippet RowActions({ item }: { item: SyncRow })}
 	<RowActionsMenu name={item.name}>
 		{#if isBackup(item)}
-			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={isLoading.syncing || !canRunPush(item)}>
+			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={syncingIds.includes(item.id) || !canRunPush(item)}>
 				<UploadIcon class="size-4" />
 				{m.back_up_now()}
 			</DropdownMenu.Item>
@@ -535,7 +552,7 @@
 		{:else}
 			<DropdownMenu.Item
 				onclick={() => handlePerformSync(item)}
-				disabled={isLoading.syncing || (pushesToGit(item) && !canRunPush(item))}
+				disabled={syncingIds.includes(item.id) || (pushesToGit(item) && !canRunPush(item))}
 			>
 				{#if pushesToGit(item)}
 					<RefreshCwIcon class="size-4" />

@@ -1,3 +1,13 @@
+> ## About this fork
+>
+> This is a development fork of [getarcaneapp/arcane](https://github.com/getarcaneapp/arcane). I track the upstream on the `main` branch here and merge my work into the default branch `jcs-next`. Container images are published to `ghcr.io/jmclaren7/arcane` and `ghcr.io/jmclaren7/arcane-agent` (tag `next`). The published images are for testing only.
+>
+> The full, up-to-date list of changes that set this fork apart from upstream — and the notes for re-applying them when rebasing — lives in **[FORK_CHANGES.md](FORK_CHANGES.md)**. In short, the fork carries a flash-of-incorrect-theme fix, Docker build-context and dev-container fixes, expanded contributor docs, and CI workflows adapted to run on a fork without upstream-only infrastructure.
+>
+> Upstream README below.
+>
+> ` `
+
 > [!IMPORTANT]
 > Feature requests have moved to [Discussions](https://github.com/getarcaneapp/arcane/discussions/categories/feature-requests). Open new requests and upvote existing ones there; issues are only used for Bug reports now to help maintain priority on those issues. 
 

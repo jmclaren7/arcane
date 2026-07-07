@@ -46,9 +46,11 @@
 	let isLoading = $state({
 		removing: false
 	});
-	// Tracks which sync row is currently running so the spinner and disabled
-	// state are per-row instead of a single table-wide flag.
-	let syncingId = $state<string | null>(null);
+	// Tracks which sync rows are currently running. Each row shows its own
+	// spinner (in the status column) and disables only its own action, so
+	// independent syncs can run at once — matching the per-sync-ID coalescing
+	// the backend already enforces.
+	let syncingIds = $state<string[]>([]);
 	let mobileFieldVisibility = $state<Record<string, boolean>>({});
 
 	function getProjectDetailsUrl(projectId: string): string {
@@ -106,8 +108,8 @@
 	}
 
 	async function handlePerformSync(id: string, _name: string) {
-		if (syncingId) return;
-		syncingId = id;
+		if (syncingIds.includes(id)) return;
+		syncingIds = [...syncingIds, id];
 		const result = await tryCatch(gitOpsSyncService.performSync(environmentId, id));
 		handleApiResultWithCallbacks({
 			result,
@@ -128,7 +130,7 @@
 				});
 			}
 		});
-		syncingId = null;
+		syncingIds = syncingIds.filter((syncId) => syncId !== id);
 	}
 
 	const columns = [
@@ -232,8 +234,13 @@
 	<Badge variant={value ? 'blue' : 'gray'} minWidth="20">{value ? m.common_enabled() : m.common_disabled()}</Badge>
 {/snippet}
 
-{#snippet StatusCell({ value }: { value: any; item: GitOpsSync; row: ArcaneRow<GitOpsSync> })}
-	{#if value === 'success'}
+{#snippet StatusCell({ value, item }: { value: any; item: GitOpsSync; row: ArcaneRow<GitOpsSync> })}
+	{#if syncingIds.includes(item.id)}
+		<span class="text-muted-foreground inline-flex items-center gap-1.5 text-sm">
+			<RefreshCwIcon class="size-3.5 animate-spin" />
+			{m.common_syncing()}
+		</span>
+	{:else if value === 'success'}
 		<Badge variant="green" minWidth="20">{m.common_success()}</Badge>
 	{:else if value === 'failed'}
 		<Badge variant="red" minWidth="20">{m.common_failed()}</Badge>
@@ -304,12 +311,8 @@
 
 {#snippet RowActions({ item }: { item: GitOpsSync })}
 	<RowActionsMenu>
-		<DropdownMenu.Item onclick={() => handlePerformSync(item.id, item.name)} disabled={syncingId !== null}>
-			{#if syncingId === item.id}
-				<RefreshCwIcon class="size-4 animate-spin" />
-			{:else}
-				<PlayIcon class="size-4" />
-			{/if}
+		<DropdownMenu.Item onclick={() => handlePerformSync(item.id, item.name)} disabled={syncingIds.includes(item.id)}>
+			<PlayIcon class="size-4" />
 			{m.git_sync_perform()}
 		</DropdownMenu.Item>
 

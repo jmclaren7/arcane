@@ -15,7 +15,7 @@
 	import { formatDateTimeShort } from '#lib/utils/formatting';
 	import { m } from '#lib/paraglide/messages';
 	import { gitOpsSyncService } from '#lib/services/gitops-sync-service';
-	import { toGitCommitUrl } from '#lib/utils/navigation';
+	import { toGitCommitUrl, shortenGitCommit } from '#lib/utils/navigation';
 	import {
 		EditIcon as PencilIcon,
 		StartIcon as PlayIcon,
@@ -235,20 +235,23 @@
 
 {#snippet CommitCell({ value, item }: { value: any; item: GitOpsSync; row: ArcaneRow<GitOpsSync> })}
 	{#if value}
-		{@const commitUrl = item.repository?.url ? toGitCommitUrl(item.repository.url, String(value)) : null}
+		{@const fullCommit = String(value)}
+		{@const shortCommit = shortenGitCommit(fullCommit)}
+		{@const commitUrl = item.repository?.url ? toGitCommitUrl(item.repository.url, fullCommit) : null}
 		<div class="flex items-center gap-1.5">
 			<HashIcon class="size-3.5 text-muted-foreground" />
 			{#if commitUrl}
 				<a
 					href={commitUrl}
 					target="_blank"
+					title={fullCommit}
 					class="rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:text-primary"
 				>
-					{value}
+					{shortCommit}
 				</a>
 			{:else}
-				<code class="rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
-					{value}
+				<code title={fullCommit} class="rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
+					{shortCommit}
 				</code>
 			{/if}
 		</div>

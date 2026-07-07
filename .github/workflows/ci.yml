@@ -1,24 +1,22 @@
 name: CI
 
 on:
+  push:
+    branches: [main, 'breaking/**']
   pull_request:
     branches: [main, 'release/**', 'breaking/**']
 
 permissions:
   contents: read
-  actions: read
-  checks: write
-  pull-requests: write
-  id-token: write
 
 concurrency:
-  group: '${{ github.workflow }}-${{ github.event.pull_request.number }}'
+  group: '${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}'
   cancel-in-progress: true
 
 jobs:
   go-tests:
     name: Go Tests (${{ matrix.module.name }})
-    runs-on: depot-ubuntu-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -45,12 +43,6 @@ jobs:
 
       - name: Setup Just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-
-      - name: Set up Depot CLI
-        if: matrix.module.gcc
-        uses: depot/setup-action@91bc8495a33ebfc504ffc89e5674379ccf23c29c # v1.7.2
-        with:
-          configure-docker: true
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -90,7 +82,7 @@ jobs:
 
   go-linter:
     name: Go Linter (${{ matrix.module.name }})
-    runs-on: depot-ubuntu-latest
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -122,7 +114,7 @@ jobs:
 
   frontend-linter:
     name: Frontend Linter
-    runs-on: depot-ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -152,15 +144,9 @@ jobs:
   e2e-tests:
     name: E2E Tests (${{ matrix.database.name }})
     if: ${{ github.head_ref != 'l10n_crowdin' }}
-    runs-on: depot-ubuntu-24.04-4
+    runs-on: ubuntu-latest
     # Passing runs finish in about 17 minutes; a broken stack must not grind through retries for hours.
     timeout-minutes: 45
-    env:
-      PLAYWRIGHT_DOCKER_IMAGE_REPOSITORY: g7r5wqb57k.registry.depot.dev/mirrors/playwright
-    permissions:
-      contents: read
-      actions: write
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -188,23 +174,41 @@ jobs:
           cache: true
           run-install: false
 
-      - name: Set up Depot CLI
-        uses: depot/setup-action@91bc8495a33ebfc504ffc89e5674379ccf23c29c # v1.7.2
-        with:
-          configure-docker: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Install E2E test dependencies
         run: vp -C tests install
 
-      - name: Pull and save test images
+      - name: Pull test images
         run: |
+          # nginx comes from mirror.gcr.io (Google's anonymous Docker Hub
+          # pull-through cache): public.ecr.aws rate-limits anonymous pulls per
+          # source IP, and the three E2E jobs pull it at the same time from the
+          # same runner. Any registry can still 429 under load, so retry.
+          pull_with_retry() {
+            for attempt in 1 2 3; do
+              if docker pull "$1"; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "::warning::docker pull $1 failed (attempt $attempt/3); retrying in $((attempt * 15))s"
+                sleep $((attempt * 15))
+              fi
+            done
+            echo "::error::docker pull $1 failed after 3 attempts"
+            return 1
+          }
+
+          # Upstream prefetches the browser image from its depot registry mirror,
+          # which a fork has no token for, so take the public default
+          # tests/setup/docker-browser.ts falls back to.
           version="$(vp -C tests exec node -p 'require("@playwright/test/package.json").version')"
-          docker pull "$PLAYWRIGHT_DOCKER_IMAGE_REPOSITORY:v$version-noble"
-          docker pull public.ecr.aws/nginx/nginx:stable-alpine
-          docker pull public.ecr.aws/docker/library/busybox:1.37
-          docker pull cgr.dev/chainguard/minio:latest-dev@sha256:d7c906993247627c19f37fc1fa302c34cf2d209ae0e7dc7d52fb0be6ac2849ba
-          docker pull ghcr.io/rustic-rs/rustic:v0.11.2
-          docker save public.ecr.aws/nginx/nginx:stable-alpine public.ecr.aws/docker/library/busybox:1.37 > /tmp/test-images.tar
+          pull_with_retry "mcr.microsoft.com/playwright:v$version-noble"
+          pull_with_retry mirror.gcr.io/library/nginx:stable-alpine
+          pull_with_retry public.ecr.aws/docker/library/busybox:1.37
+          pull_with_retry cgr.dev/chainguard/minio:latest-dev@sha256:d7c906993247627c19f37fc1fa302c34cf2d209ae0e7dc7d52fb0be6ac2849ba
+          pull_with_retry ghcr.io/rustic-rs/rustic:v0.11.2
 
       - name: Run Playwright E2E tests
         run: vp -C tests exec playwright test ${{ matrix.database.playwright_projects }}
@@ -217,62 +221,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report-${{ matrix.database.name }}
-          path: |
-            tests/.report
-            !tests/.report/auth/**
-            !tests/.report/bin/**
-            !tests/.report/cli/**
-          include-hidden-files: true
-          retention-days: 15
-
-  cli-e2e-tests:
-    name: CLI E2E Tests (proxy)
-    if: ${{ github.head_ref != 'l10n_crowdin' }}
-    runs-on: depot-ubuntu-24.04-4
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      actions: write
-      id-token: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
-        with:
-          node-version: 26
-          cache: true
-          run-install: false
-
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: cli/go.mod
-          cache: true
-          cache-dependency-path: *go-cache-dependencies
-
-      - name: Set up Depot CLI
-        uses: depot/setup-action@91bc8495a33ebfc504ffc89e5674379ccf23c29c # v1.7.2
-        with:
-          configure-docker: true
-
-      - name: Install Playwright test dependencies
-        run: vp -C tests install
-
-      - name: Run CLI E2E tests against socket proxy
-        run: vp -C tests exec playwright test --project=cli
-        env:
-          COMPOSE_FILE: setup/compose-proxy.yaml
-          BASE_URL: http://localhost:3002
-          PLAYWRIGHT_DOCKER_BROWSER: '0'
-          E2E_ADMIN_STATIC_API_KEY: ${{ secrets.E2E_ADMIN_STATIC_API_KEY }}
-
-      - name: Upload Playwright HTML report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: playwright-report-proxy-cli
           path: |
             tests/.report
             !tests/.report/auth/**

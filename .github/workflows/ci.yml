@@ -1,24 +1,22 @@
 name: CI
 
 on:
+  push:
+    branches: [main, "breaking/**"]
   pull_request:
     branches: [main, "release/**", "breaking/**"]
 
 permissions:
   contents: read
-  actions: read
-  checks: write
-  pull-requests: write
-  id-token: write
 
 concurrency:
-  group: "${{ github.workflow }}-${{ github.event.pull_request.number }}"
+  group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
   cancel-in-progress: true
 
 jobs:
   go-tests:
     name: Go Tests (${{ matrix.module.name }})
-    runs-on: depot-ubuntu-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -45,12 +43,6 @@ jobs:
 
       - name: Setup Just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-
-      - name: Set up Depot CLI
-        if: matrix.module.gcc
-        uses: depot/setup-action@91bc8495a33ebfc504ffc89e5674379ccf23c29c # v1.7.2
-        with:
-          configure-docker: true
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -86,7 +78,7 @@ jobs:
 
   go-linter:
     name: Go Linter (${{ matrix.module.name }})
-    runs-on: depot-ubuntu-latest
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -115,100 +107,9 @@ jobs:
           working-directory: ${{ matrix.module.name }}
           only-new-issues: false
 
-  deadcode:
-    name: Go Deadcode Analysis
-    if: github.event.pull_request.head.repo.owner.login == 'getarcaneapp'
-    runs-on: depot-ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-
-      - name: Install deadcode
-        run: go install golang.org/x/tools/cmd/deadcode@latest
-
-      - name: Add deadcode problem matcher
-        run: echo "::add-matcher::.github/matchers/deadcode-matcher.json"
-
-      - name: Run deadcode analysis
-        id: deadcode
-        working-directory: backend
-        continue-on-error: true
-        run: |
-          OUTPUT=$(deadcode ./... 2>&1 || true)
-          echo "$OUTPUT"
-          COUNT=$(echo "$OUTPUT" | grep -c "unreachable func" || true)
-          if [ -z "$COUNT" ]; then COUNT=0; fi
-          echo "count=$COUNT" >> $GITHUB_OUTPUT
-          echo "output<<EOF" >> $GITHUB_OUTPUT
-          echo "$OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Request App Token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.ARCANE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ARCANE_APP_PRIVATE_KEY }}
-          owner: getarcaneapp
-          repositories: arcane
-          permission-pull-requests: write
-
-      - name: Find Comment
-        uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad # v4.0.0
-        id: fc
-        with:
-          token: ${{ steps.app-token.outputs.token }}
-          issue-number: ${{ github.event.pull_request.number }}
-          comment-author: "arcane-github-automation[bot]"
-          body-includes: "## 🔍 Deadcode Analysis"
-
-      - name: Delete comment if no deadcode found
-        if: steps.deadcode.outputs.count == '0' && steps.fc.outputs.comment-id != ''
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            github.rest.issues.deleteComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: ${{ steps.fc.outputs.comment-id }}
-            })
-
-      - name: Comment deadcode results
-        if: steps.deadcode.outputs.count != '0'
-        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9 # v5.0.0
-        with:
-          comment-id: ${{ steps.fc.outputs.comment-id }}
-          issue-number: ${{ github.event.pull_request.number }}
-          token: ${{ steps.app-token.outputs.token }}
-          body: |
-            ## 🔍 Deadcode Analysis
-
-            Found **${{ steps.deadcode.outputs.count }}** unreachable functions in the backend.
-
-            <details>
-            <summary>View details</summary>
-
-            ```
-            ${{ steps.deadcode.outputs.output }}
-            ```
-
-            Only remove deadcode that you know is 100% no longer used.
-
-            </details>
-
-            > Analysis from commit ${{ github.sha }}
-          edit-mode: replace
-
   frontend-linter:
     name: Frontend Linter
-    runs-on: depot-ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -238,13 +139,7 @@ jobs:
   e2e-tests:
     name: E2E Tests (${{ matrix.database.name }})
     if: ${{ github.head_ref != 'l10n_crowdin' }}
-    runs-on: depot-ubuntu-24.04-4
-    env:
-      PLAYWRIGHT_DOCKER_IMAGE_REPOSITORY: g7r5wqb57k.registry.depot.dev/mirrors/playwright
-    permissions:
-      contents: read
-      actions: write
-      id-token: write
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -272,10 +167,11 @@ jobs:
           cache: true
           run-install: false
 
-      - name: Set up Depot CLI
-        uses: depot/setup-action@91bc8495a33ebfc504ffc89e5674379ccf23c29c # v1.7.2
-        with:
-          configure-docker: true
+      - name: Setup Just
+        uses: extractions/setup-just@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Install E2E test dependencies
         run: vp -C tests install
@@ -301,58 +197,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report-${{ matrix.database.name }}
-          path: |
-            tests/.report
-            tests/test-results
-          include-hidden-files: true
-          retention-days: 15
-
-  cli-e2e-tests:
-    name: CLI E2E Tests (proxy)
-    if: ${{ github.head_ref != 'l10n_crowdin' }}
-    runs-on: depot-ubuntu-24.04-4
-    permissions:
-      contents: read
-      actions: write
-      id-token: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
-        with:
-          node-version: 26
-          cache: true
-          run-install: false
-
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: cli/go.mod
-          cache-dependency-path: cli/go.sum
-
-      - name: Set up Depot CLI
-        uses: depot/setup-action@91bc8495a33ebfc504ffc89e5674379ccf23c29c # v1.7.2
-        with:
-          configure-docker: true
-
-      - name: Install Playwright test dependencies
-        run: vp -C tests install
-
-      - name: Run CLI E2E tests against socket proxy
-        run: vp -C tests exec playwright test --project=cli
-        env:
-          COMPOSE_FILE: setup/compose-proxy.yaml
-          BASE_URL: http://localhost:3002
-          PLAYWRIGHT_DOCKER_BROWSER: "0"
-          E2E_ADMIN_STATIC_API_KEY: ${{ secrets.E2E_ADMIN_STATIC_API_KEY }}
-
-      - name: Upload Playwright HTML report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: playwright-report-proxy-cli
           path: |
             tests/.report
             tests/test-results

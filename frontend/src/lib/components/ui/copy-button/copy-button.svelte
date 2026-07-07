@@ -9,7 +9,6 @@
 	import { scale } from 'svelte/transition';
 	import type { CopyButtonProps } from './types';
 	import { CopyIcon, CloseIcon, CheckIcon } from '#lib/icons';
-	import * as Tooltip from '#lib/components/ui/tooltip';
 	import { onMount } from 'svelte';
 	import { m } from '#lib/paraglide/messages';
 
@@ -32,10 +31,12 @@
 
 	const resolvedSize = $derived(size === 'icon' && children ? 'default' : size);
 
-	let isSecure = $state(true);
+	// The Clipboard API is only exposed in secure contexts. When it's unavailable
+	// (usually an insecure/non-HTTPS connection) we hide the button entirely.
+	let canCopy = $state(true);
 
 	onMount(() => {
-		isSecure = window.isSecureContext || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+		canCopy = typeof navigator !== 'undefined' && !!navigator.clipboard;
 	});
 </script>
 
@@ -54,7 +55,7 @@
 	</div>
 {/snippet}
 
-{#if isSecure}
+{#if canCopy}
 	<ArcaneButton
 		bind:ref
 		action="base"
@@ -95,28 +96,4 @@
 		</span>
 		{@render children?.()}
 	</ArcaneButton>
-{:else}
-	<Tooltip.Root>
-		<Tooltip.Trigger>
-			<ArcaneButton
-				bind:ref
-				action="base"
-				tone={variant === 'ghost' ? 'ghost' : variant === 'outline' ? 'outline' : 'outline'}
-				size={resolvedSize}
-				{tabindex}
-				class={cn('flex cursor-not-allowed items-center gap-2 opacity-50', className)}
-				type="button"
-				name="copy"
-				disabled
-			>
-				<span class="grid place-items-center">
-					{@render idleIcon()}
-				</span>
-				{@render children?.()}
-			</ArcaneButton>
-		</Tooltip.Trigger>
-		<Tooltip.Content>
-			<p>{m.common_copy_https_required()}</p>
-		</Tooltip.Content>
-	</Tooltip.Root>
 {/if}

@@ -35,7 +35,7 @@
 	import { z } from 'zod/v4';
 	import { createForm } from '#lib/utils/settings.js';
 	import { m } from '#lib/paraglide/messages.js';
-	import { toGitCommitUrl } from '#lib/utils/navigation.js';
+	import { toGitCommitUrl, shortenGitCommit } from '#lib/utils/navigation.js';
 	import { toSafeHref } from '#lib/utils/navigation.js';
 	import { PersistedState } from 'runed';
 	import { useUrlTab } from '#lib/hooks/use-url-tab.svelte.js';
@@ -2024,6 +2024,7 @@
 
 			{#if project.lastSyncCommit}
 				{@const commitUrl = project.gitRepositoryURL ? toGitCommitUrl(project.gitRepositoryURL, project.lastSyncCommit) : null}
+				{@const shortCommit = shortenGitCommit(project.lastSyncCommit)}
 				<div class="mt-1 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
 					<div class="flex items-center gap-1.5">
 						<span class="hidden sm:inline">{m.commit()}:</span>
@@ -2031,13 +2032,14 @@
 							<a
 								href={commitUrl}
 								target="_blank"
+								title={project.lastSyncCommit}
 								class="font-mono transition-colors hover:text-primary sm:rounded sm:bg-muted sm:px-1.5 sm:py-0.5"
 							>
-								{project.lastSyncCommit}
+								{shortCommit}
 							</a>
 						{:else}
-							<span class="font-mono sm:rounded sm:bg-muted sm:px-1.5 sm:py-0.5">
-								{project.lastSyncCommit}
+							<span title={project.lastSyncCommit} class="font-mono sm:rounded sm:bg-muted sm:px-1.5 sm:py-0.5">
+								{shortCommit}
 							</span>
 						{/if}
 					</div>

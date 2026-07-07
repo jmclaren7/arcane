@@ -319,6 +319,12 @@ func (c *Client) Clone(ctx context.Context, url, branch string, auth AuthConfig)
 	cloneOptions := &git.CloneOptions{
 		URL:      url,
 		Progress: nil,
+		// GitOps only ever needs the working tree at the branch tip, never
+		// history or tags. A full-history clone was the dominant cost of every
+		// sync (and of each browse / build-context clone) and grew with repo
+		// age; a shallow, tag-less clone keeps it flat.
+		Depth: 1,
+		Tags:  git.NoTags,
 	}
 
 	if authMethod != nil {
@@ -565,14 +571,27 @@ func (c *Client) TestConnection(ctx context.Context, url, branch string, auth Au
 		return err
 	}
 
-	tmpDir, err := c.Clone(ctx, url, branch, auth)
+	// Reachability and credentials can be proven with an in-memory ls-remote;
+	// the old implementation cloned the whole repository just to delete it,
+	// making "Test Connection" as slow as a full sync. When a branch is set we
+	// still confirm it exists among the remote refs so the branch validation the
+	// clone used to provide is preserved.
+	refs, err := c.listRemoteReferences(ctx, url, auth)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = c.Cleanup(tmpDir)
-	}()
-	return nil
+
+	if branch == "" {
+		return nil
+	}
+
+	wantBranch := plumbing.NewBranchReferenceName(branch)
+	for _, ref := range refs {
+		if ref.Name() == wantBranch {
+			return nil
+		}
+	}
+	return errors.Errorf("branch %q not found in remote repository", branch)
 }
 
 // FileExists checks if a file exists in the repository

@@ -17,35 +17,16 @@ When you rebase, work through every entry below. For each one:
 
 > **Last rebased onto upstream:** `20c608c2` — _feat: add project file tree
 > management (#2893)_ (release 2.0.x), on 2026-06-13.
+>
+> **Last reviewed against upstream:** `b501c49` — _fix: skip SMTP auth without
+> full credentials and add none auth mode (#3192)_, on 2026-07-07 (redundancy
+> review only; no rebase performed).
 
 ---
 
 ## Active changes
 
-### 1. Sanitize discovered project names
-
-- **Files:** `backend/internal/services/project_service.go`,
-  `backend/internal/services/project_service_test.go`
-- **What:** In `upsertProjectForDir`, set the new project's `Name` to
-  `projects.SanitizeProjectName(dirName)` instead of the raw `dirName`, keeping
-  the on-disk folder name in `DirName`/`Path`. Also self-heal existing rows on
-  sync: if `SanitizeProjectName(existing.Name) != existing.Name`, update the
-  `name` column and log it.
-- **Why:** Discovered directories with characters outside `[A-Za-z0-9_-]`
-  (e.g. `my.project`) produced a `Name` the editor's name field rejects, making
-  the project silently uneditable from the UI.
-- **Re-apply notes:** The patch sits in `upsertProjectForDir`. `SanitizeProjectName`
-  lives in `backend/pkg/projects/fs_util.go` and is already imported in the
-  service. Tests anchor after
-  `TestProjectService_SyncProjectsFromFileSystem_RefreshesServiceCountOnComposeChange`
-  and use helpers `setupProjectTestDB`, `createComposeProjectDir`, `ptr`, and
-  `NewProjectService(db, settingsService, nil, nil, nil, nil, config.Load())`.
-  Confirm the `NewProjectService` arity before re-applying.
-- **Redundancy check:** Upstream still seeds `Name: dirName` unsanitised in the
-  discovery path — **keep**.
-- **Verify:** `go test ./internal/services/ -run 'TestProjectService_SyncProjectsFromFileSystem_(SanitizesDirNameWithDot|HealsExistingInvalidName)'`
-
-### 2. Set background early to prevent white flash
+### 1. Set background early to prevent white flash
 
 - **Files:** `frontend/src/app.html`
 - **What:** Inject an inline `<style>` (light/dark `html` background +
@@ -60,9 +41,9 @@ When you rebase, work through every entry below. For each one:
   `mode-watcher-mode` localStorage key — confirm both still exist
   (`mode-watcher` in `frontend/package.json`).
 - **Redundancy check:** Upstream `app.html` still has no early-background
-  handling — **keep**.
+  handling (only the two `theme-color` metas) — **keep**.
 
-### 3. Preinstall Bun in the dev Dockerfile
+### 2. Preinstall Bun in the dev Dockerfile
 
 - **Files:** `docker/Dockerfile.dev`
 - **What:** In the `frontend-dev` stage, `apt-get install ca-certificates curl
@@ -74,27 +55,23 @@ When you rebase, work through every entry below. For each one:
   `FROM ... AS frontend-dev` line. Keep the Node base image tag in sync with
   upstream (currently `node:26-trixie-slim`).
 - **Redundancy check:** `svelte-check-rs` is still the `check` script in
-  `frontend/package.json` and upstream's dev image still omits Bun — **keep**.
+  `frontend/package.json` and upstream's `frontend-dev` stage still omits Bun
+  (the `ca-certificates`/`curl` install lives in the separate `backend-dev`
+  stage, not the frontend one) — **keep**.
 
-### 4. Exclude nested build artifacts from the Docker build context
+### 3. Exclude nested build artifacts from the Docker build context
 
 - **Files:** `.dockerignore`
 - **What:** Add recursive `**/node_modules`, `**/build`, `**/.svelte-kit`
   alongside the existing top-level entries.
 - **Why:** Nested workspace folders were copied into the build context and
   caused build failures (e.g. on Windows, where the bundled modules differed).
-- **Redundancy check:** Upstream's `.dockerignore` is still non-recursive —
+- **Redundancy check:** Upstream added some recursive media/test patterns
+  (`**/*.test.js`, `**/.DS_Store`, `**/*.mp4`), but the build-artifact entries
+  `node_modules`, `build`, and `.svelte-kit` are still top-level only —
   **keep**.
 
-### 5. Keep LF line endings for scripts
-
-- **Files:** `.gitattributes` (new file)
-- **What:** Force `eol=lf` for `*.sh`, `*.bash`, and `Dockerfile`.
-- **Why:** Git on Windows (`autocrlf`) rewrites them to CRLF, which breaks the
-  scripts and Docker build.
-- **Redundancy check:** Upstream has no `.gitattributes` — **keep**.
-
-### 6. CI/workflows adapted for this fork
+### 4. CI/workflows adapted for this fork
 
 - **Files:** `.github/workflows/ci.yml`, `.github/workflows/build-next-images.yml`
 - **Intent:** Make CI run on a fork without upstream-only
@@ -122,8 +99,11 @@ When you rebase, work through every entry below. For each one:
   named `arcane-agent` (not upstream's `arcane-headless`) because it reads
   better when the repo owner is not "Arcane"; preserve published image names so
   existing pullers don't break.
-- **Redundancy check:** Upstream still relies on depot/GoReleaser/cosign — the
-  fork adaptation is still required. **keep.**
+- **Redundancy check:** Upstream still relies on depot/GoReleaser/cosign — its
+  `ci.yml` still uses `depot-*` runners, Depot CLI/test reporting, and the
+  `deadcode` + `cli-e2e-tests` jobs, and `build-next-images.yml` still uses
+  depot, `arcane-headless`, and `linux/arm/v7`. The fork adaptation is still
+  required. **keep.**
 - **Out of scope:** `build-pr-images.yml` and `release.yml` are left at
   upstream — the fork has never customised them.
 
@@ -134,6 +114,29 @@ When you rebase, work through every entry below. For each one:
 Changes the fork used to carry that upstream has since implemented (do **not**
 re-introduce them):
 
+- **Sanitize discovered project names** *(was Active #1:
+  `project_service.go`, `project_service_test.go`)* — upstream reworked
+  `upsertProjectForDir`. New projects are now created with
+  `Name: composeMetadata.resolvedProjectName`, where `resolvedProjectName`
+  defaults to `projects.NormalizeProjectName(dirName)` (compose-go
+  normalization → `[a-z0-9_-]`, a subset of the editor-accepted
+  `[A-Za-z0-9_-]`). Existing rows self-heal on sync in the same function via
+  `NormalizeProjectName(existing.Name) != existing.Name`. This covers both
+  halves of the fork change (a valid `Name` on discovery **and** self-healing
+  existing invalid names), so the fork's `SanitizeProjectName` patch and its
+  tests are redundant. At the 2.0.x rebase upstream still seeded
+  `Name: dirName` unsanitised, which is why this was Active then.
+  _Dropped at the review against upstream `b501c49` (2026-07-07)._
+- **Keep LF line endings for scripts** *(was Active #5: `.gitattributes`)* —
+  upstream now ships its own `.gitattributes` forcing `eol=lf` for `*.sh`
+  (plus `.husky/*`, `.husky/_/*`, `Justfile`), which covers the real concern
+  (bash shebangs broken by Windows `autocrlf`). The fork's `*.bash` rule
+  matched no files in the tree. The only rule upstream lacks is
+  `Dockerfile text eol=lf`; modern BuildKit tolerates CRLF in Dockerfiles, so
+  this residual is marginal. If it's still wanted, append that single line to
+  upstream's `.gitattributes` on rebase rather than re-adding the fork's own
+  file (which would now conflict). _Dropped at the review against upstream
+  `b501c49` (2026-07-07)._
 - **User avatar 404 when no email is set** *(was: `sidebar-user.svelte`)* —
   upstream's `getGravatarUrl` now returns `''` early for a falsy email, so the
   Gravatar 404 no longer occurs. The fork's `&& user?.email` guard is redundant.

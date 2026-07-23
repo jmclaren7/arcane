@@ -5,9 +5,9 @@ env:
 
 on:
   push:
-    branches: [main, "breaking/**", "jcs-next"]
+    branches: [main, "breaking/**", "main"]
   pull_request:
-    branches: [main, "release/**", "breaking/**", "jcs-next"]
+    branches: [main, "release/**", "breaking/**", "main"]
 
 permissions:
   contents: read

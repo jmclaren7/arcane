@@ -3,7 +3,7 @@ name: Build Next Images
 on:
   workflow_dispatch:
   push:
-    branches: [jcs-next]
+    branches: [main]
 
 concurrency:
   group: build-next-images

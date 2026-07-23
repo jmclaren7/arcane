@@ -15,8 +15,15 @@ When you rebase, work through every entry below. For each one:
 3. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Dropped" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `b501c49` — _fix: skip SMTP auth without full
-> credentials and add none auth mode (#3192)_, on 2026-07-07.
+> **Last rebased onto upstream:** `73d13dc` — _refactor: migrate from echo/v4 to
+> echo/v5 (#3365)_, on 2026-07-23. _(Previously `b501c49`, 2026-07-07.)_
+>
+> This rebase crossed several large upstream refactors — echo v4→v5, wire→fx DI,
+> samber/mo + samber/hot adoption, unified error handling — plus a frontend
+> `$lib` → `#lib` import-alias migration and a workflows reshuffle. None of the
+> backend refactors touched the fork's surface (`gitutil.Clone` /
+> `TestConnection` merged clean); the frontend changes all needed the `#lib`
+> alias adopted while re-applying (see notes below).
 
 ---
 
@@ -128,17 +135,28 @@ When you rebase, work through every entry below. For each one:
   upstream `ci.yml` cleanly carries the fork's removals while inheriting
   upstream's pin bumps; `build-next-images.yml` is a wholesale fork rewrite, so
   re-derive it by hand and only sync upstream's action pins into it.) Keep
-  action/toolchain pins in sync with upstream (currently node 26,
-  `actions/checkout@v7.0.0`, `golangci-lint-action@v9.3.0`, `actions/cache@v6.1.0`,
-  `docker/login-action@v4.4.0`). The fork intentionally keeps the agent image
-  named `arcane-agent` (not upstream's `arcane-headless`) because it reads
-  better when the repo owner is not "Arcane"; preserve published image names so
-  existing pullers don't break.
-- **Redundancy check:** Upstream still relies on depot/GoReleaser/cosign — its
-  `ci.yml` still uses `depot-*` runners, Depot CLI/test reporting, and the
-  `deadcode` + `cli-e2e-tests` jobs, and `build-next-images.yml` still uses
-  depot, `arcane-headless`, and `linux/arm/v7`. The fork adaptation is still
-  required. **keep.**
+  action/toolchain pins in sync with upstream. At the `73d13dc` rebase the fork
+  `ci.yml` adopted upstream's current pins (node 26, `actions/checkout@v7`,
+  `actions/setup-go@v7`, `golangci-lint-action@v9.3.0`, `actions/cache@v6.1.0`),
+  inherited upstream's new `Lint protobuf definitions` step and the renamed
+  `type-check` job (`pnpm install --frozen-lockfile` + `just lint js`), and kept
+  the fork's `push`/`jcs-next` triggers, `contents: read` permissions, the
+  `github.ref` concurrency fallback (needed for push events), `ubuntu-latest`
+  runners, and `docker/setup-buildx-action` in `e2e-tests`. `build-next-images.yml`
+  still pins `actions/checkout@v7.0.0` and `docker/login-action@v4.4.0`.
+  The fork intentionally keeps the agent image named `arcane-agent` (not
+  upstream's `arcane-headless`) because it reads better when the repo owner is
+  not "Arcane"; preserve published image names so existing pullers don't break.
+- **Redundancy check:** At `73d13dc` upstream **removed** its own
+  `build-next-images.yml` (and `merge-conflict.yml`) and now publishes images
+  only from `release.yml` via GoReleaser Pro, which a fork can't run. So the
+  fork's `build-next-images.yml` no longer has an upstream counterpart to
+  re-derive from — it is a standalone fork workflow (a **modify/delete** conflict
+  on rebase; resolve by keeping the fork file). Verify the Dockerfile paths it
+  references still exist (`docker/Dockerfile`, `docker/Dockerfile-agent` — both
+  present, both still take `VERSION`/`REVISION` build-args). Upstream's `ci.yml`
+  still uses `depot-*` runners, Depot CLI, and the `deadcode` + `cli-e2e-tests`
+  jobs. The fork adaptation is still required. **keep.**
 - **Out of scope:** `build-pr-images.yml` and `release.yml` are left at
   upstream — the fork has never customised them.
 

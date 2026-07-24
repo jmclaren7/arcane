@@ -1,7 +1,7 @@
-# Fork changes (jcs-next)
+# Fork changes
 
 This file is the authoritative list of changes that set this fork
-(`jmclaren7/arcane`, branch `jcs-next`) apart from upstream
+(`jmclaren7/arcane`, branch `main`) apart from upstream
 (`getarcaneapp/arcane`, branch `main`). It is written to be used by a human
 or an AI agent when **rebasing onto a newer upstream or re-applying these
 changes**.
@@ -33,7 +33,7 @@ When you rebase, work through every entry below. For each one:
 
 - **Files:** `README.md`
 - **What:** Prepend a blockquoted "About this fork" section above upstream's
-  README that explains this is a dev fork, points at `FORK_CHANGES.md`, and
+  README that explains this is a dev fork, points at `FORK.md`, and
   lists the published image names/tags.
 - **Why:** Makes the fork's purpose and image locations obvious to anyone who
   lands on the repo, and links to the change list.
@@ -113,8 +113,8 @@ When you rebase, work through every entry below. For each one:
 - **Files:** `.github/workflows/ci.yml`, `.github/workflows/build-next-images.yml`
 - **Intent:** Make CI run on a fork without upstream-only
   infrastructure:
-  - Run on the `jcs-next` branch (CI on push/PR; next images on push to
-    `jcs-next`).
+  - Run on the `main` branch (CI on push/PR; next images on push to
+    `main`).
   - Use standard `ubuntu` runners instead of `depot-*` runners; use
     `docker/setup-qemu-action` + `docker/setup-buildx-action` instead of the
     depot buildx driver.
@@ -140,7 +140,7 @@ When you rebase, work through every entry below. For each one:
   `actions/setup-go@v7`, `golangci-lint-action@v9.3.0`, `actions/cache@v6.1.0`),
   inherited upstream's new `Lint protobuf definitions` step and the renamed
   `type-check` job (`pnpm install --frozen-lockfile` + `just lint js`), and kept
-  the fork's `push`/`jcs-next` triggers, `contents: read` permissions, the
+  the fork's `push`/`main` triggers, `contents: read` permissions, the
   `github.ref` concurrency fallback (needed for push events), `ubuntu-latest`
   runners, and `docker/setup-buildx-action` in `e2e-tests`. `build-next-images.yml`
   still pins `actions/checkout@v7.0.0` and `docker/login-action@v4.4.0`.

@@ -3,6 +3,7 @@ package edge
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -90,7 +91,12 @@ func (c *TunnelClient) connectAndServeGRPC(ctx context.Context) error {
 	setActiveAgentTunnelConn(tunnelConn)
 	defer clearActiveAgentTunnelConn(tunnelConn)
 	if err := tunnelConn.Send(c.registerMessageInternal()); err != nil {
-		return errors.WrapIf(err, "failed to send register message")
+		// A stream Send returns io.EOF when the server has already terminated
+		// the stream; the terminal status only surfaces on Recv, so fall
+		// through to the registration wait to report the real reason.
+		if !errors.Is(err, io.EOF) {
+			return errors.WrapIf(err, "failed to send register message")
+		}
 	}
 
 	registerMsg, err := c.awaitGRPCRegistrationInternal(ctx)

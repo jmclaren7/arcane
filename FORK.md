@@ -15,15 +15,29 @@ When you rebase, work through every entry below. For each one:
 3. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Dropped" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `73d13dc` — _refactor: migrate from echo/v4 to
-> echo/v5 (#3365)_, on 2026-07-23. _(Previously `b501c49`, 2026-07-07.)_
+> **Last rebased onto upstream:** `a3a56d6` — _refactor: bump
+> go.getarcane.app/updater to v0.7.0 (#3387)_, on 2026-07-25. _(Previously
+> `73d13dc`, 2026-07-23.)_
 >
-> This rebase crossed several large upstream refactors — echo v4→v5, wire→fx DI,
-> samber/mo + samber/hot adoption, unified error handling — plus a frontend
-> `$lib` → `#lib` import-alias migration and a workflows reshuffle. None of the
-> backend refactors touched the fork's surface (`gitutil.Clone` /
+> This rebase carried 7 new upstream commits: raw-CLI-output/watch-mode for
+> Docker operations, a dashboard redesign (clickable tiles, volumes tile,
+> configurable default landing page), an environment-settings page/tabs
+> redesign, appearance settings moving to the user profile view, a Swarm
+> resource-scoping/stack-deploy fix, and the updater dependency bump. All 16
+> fork commits rebased with **zero conflicts**. Upstream's dashboard
+> landing-page work rewrote `frontend/src/lib/utils/navigation.ts` (moved
+> mobile-nav settings from `settingsStore` to `userStore`, added
+> `getEffectiveLandingPage`) and trimmed an icon import in the projects
+> `+page.svelte`; both files also carry fork change #9 (`shortenGitCommit`),
+> which sits in an unrelated part of each file and merged clean — verified by
+> hand post-rebase, no re-apply needed.
+>
+> Earlier rebase: crossed several large upstream refactors — echo v4→v5,
+> wire→fx DI, samber/mo + samber/hot adoption, unified error handling — plus a
+> frontend `$lib` → `#lib` import-alias migration and a workflows reshuffle.
+> None of the backend refactors touched the fork's surface (`gitutil.Clone` /
 > `TestConnection` merged clean); the frontend changes all needed the `#lib`
-> alias adopted while re-applying (see notes below).
+> alias adopted while re-applying.
 
 ---
 
@@ -249,6 +263,27 @@ When you rebase, work through every entry below. For each one:
   in place, don't prune it.
 - **Redundancy check:** Upstream `copy-button.svelte` still renders the
   disabled-button-with-tooltip fallback keyed on `isSecure` — **keep**.
+
+### 11. Surface real rejection reason on gRPC register-send race
+
+- **Files:** `backend/pkg/libarcane/edge/client_transport_grpc.go`
+- **What:** In `connectAndServeGRPC`, when the tunnel stream's `Send` of the
+  register message fails with `io.EOF`, fall through to
+  `awaitGRPCRegistrationInternal` instead of returning immediately, so the
+  real terminal status (e.g. "invalid agent token") surfaces instead of the
+  bare `"failed to send register message: EOF"`.
+- **Why:** Per gRPC semantics, a stream's terminal status only surfaces on
+  `Recv`, not `Send` — when the manager rejects the stream before the
+  client's `Send` completes, `SendMsg` returns a bare `io.EOF` and the actual
+  rejection reason was lost. This also fixed the flaky
+  `TestTunnelClient_connectAndServeGRPC_RegistrationRejected` test, which
+  failed whenever the server's teardown won the race against `Send`.
+- **Re-apply notes:** Anchors on the `tunnelConn.Send(c.registerMessageInternal())`
+  error check in `connectAndServeGRPC`; wrap the check in
+  `if !errors.Is(err, io.EOF) { return ... }` and let `io.EOF` fall through.
+  Requires the `io` import.
+- **Redundancy check:** Upstream's `client_transport_grpc.go` still returns
+  immediately on any `Send` error, including `io.EOF` — **keep**.
 
 ---
 

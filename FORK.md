@@ -1,5 +1,25 @@
 # Fork changes
 
+## Purpose of this fork
+
+`jmclaren7/arcane` is a personal development fork of
+[`getarcaneapp/arcane`](https://github.com/getarcaneapp/arcane), kept
+deliberately thin and tracking upstream `main` closely. It exists to run
+Arcane in a self-hosted lab from images the fork builds itself
+(`ghcr.io/jmclaren7/arcane` and `ghcr.io/jmclaren7/arcane-agent`, tag `next`),
+which upstream's release pipeline can't provide to a fork because it depends on
+GoReleaser Pro, Depot runners, and cosign secrets. Everything the fork carries
+falls into three buckets: **infrastructure adaptations** so CI, image builds,
+and the dev container work outside upstream's environment (changes #3, #4, #6);
+**documentation** describing the fork itself and filling gaps in the
+contributor setup docs (#1, #5); and a small set of **behavioural fixes and
+UI refinements** that are genuinely upstreamable but haven't been submitted or
+merged yet (#2, #7–#11). The fork deliberately carries no product features of
+its own and no divergent architecture — every rebase resolves conflicts in
+favour of upstream unless the entry below marks the fork side as intentional,
+and any change upstream implements independently is dropped rather than
+maintained.
+
 This file is the authoritative list of changes that set this fork
 (`jmclaren7/arcane`, branch `main`) apart from upstream
 (`getarcaneapp/arcane`, branch `main`). It is written to be used by a human
@@ -9,28 +29,63 @@ changes**.
 When you rebase, work through every entry below. For each one:
 
 1. Check whether upstream has since implemented an equivalent fix. If it has,
-   **drop** the fork change and move it to "Dropped / now upstream" with a note.
+   **drop** the fork change and move it to "Superseded / now upstream", naming
+   the upstream commit that replaced it.
 2. Otherwise re-apply it, adapting to any code that moved. Re-run the listed
    verification.
-3. Keep this file in sync: update the "Last rebased onto" marker, and move
-   entries between the "Active" and "Dropped" sections as upstream evolves.
+3. **Build and type-check the result, even when the rebase reported no
+   conflicts.** Git only detects conflicts between overlapping hunks; an
+   upstream change elsewhere in a file the fork also edits (an import removed, a
+   helper renamed) replays cleanly and breaks only at compile time. This has
+   already happened once — see the `50c3d5d` note below. The minimum gate is
+   `GOEXPERIMENT=jsonv2 go build ./...` and `go vet ./...` in `backend/`, plus
+   `pnpm install --frozen-lockfile && pnpm -C frontend check`.
+4. Keep this file in sync: update the "Last rebased onto" marker, and move
+   entries between the "Active" and "Superseded" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `a3a56d6` — _refactor: bump
-> go.getarcane.app/updater to v0.7.0 (#3387)_, on 2026-07-25. _(Previously
-> `73d13dc`, 2026-07-23.)_
+> **Last rebased onto upstream:** `50c3d5d` — _fix: honor updater opt-out
+> labels during image scans (#3405)_, on 2026-07-27. _(Previously `a3a56d6`,
+> 2026-07-25.)_
 >
-> This rebase carried 7 new upstream commits: raw-CLI-output/watch-mode for
-> Docker operations, a dashboard redesign (clickable tiles, volumes tile,
-> configurable default landing page), an environment-settings page/tabs
-> redesign, appearance settings moving to the user profile view, a Swarm
-> resource-scoping/stack-deploy fix, and the updater dependency bump. All 16
-> fork commits rebased with **zero conflicts**. Upstream's dashboard
-> landing-page work rewrote `frontend/src/lib/utils/navigation.ts` (moved
-> mobile-nav settings from `settingsStore` to `userStore`, added
-> `getEffectiveLandingPage`) and trimmed an icon import in the projects
-> `+page.svelte`; both files also carry fork change #9 (`shortenGitCommit`),
-> which sits in an unrelated part of each file and merged clean — verified by
-> hand post-rebase, no re-apply needed.
+> This rebase carried 22 new upstream commits: a four-commit static-analysis
+> and error-handling sweep across the Go modules (`3938e1b`, `c89ac52`,
+> `e4a5420`, `5a612eb`), a security hardening pass on credential targets and
+> browse paths (`058f3ad`), an updates-page redesign with row/bulk/"Update All"
+> actions (`6118af4`, `30189ac`), several backend fixes (relative compose paths
+> escaping the projects mount, duplicate diagnostic log entries, unreadable
+> project directories, abandoned dashboard/activity streams), CLI/API contract
+> alignment, dependency bumps, and Crowdin translation updates. All 17 fork
+> commits replayed with **zero textual conflicts**.
+>
+> One **semantic** conflict needed a manual fix, and it is the kind a clean
+> rebase hides: upstream's `5a612eb`/`e4a5420` cleanup removed the now-unused
+> `fmt` import from `backend/pkg/gitutil/git.go` (swapping `fmt.Fprintf`
+> warnings for `slog.Warn`), while fork change #8 introduced a `fmt.Errorf`
+> call in the rewritten `TestConnection` further down the same file. The two
+> hunks don't overlap, so git replayed both happily and produced a tree that
+> **does not compile** (`undefined: fmt`). Resolved in favour of upstream — the
+> fork call now uses `errors.Errorf` from `emperror.dev/errors`, matching the
+> idiom used everywhere else in that file, rather than re-adding the import
+> upstream deliberately dropped. **Lesson for future rebases: a conflict-free
+> rebase is not a verified rebase — always build and type-check afterwards.**
+> Verified post-rebase: `go build ./...` and `go vet` clean over the whole
+> backend, `go test ./pkg/gitutil/... ./pkg/libarcane/edge/...` passing, and
+> `pnpm -C frontend check` reporting 0 errors / 0 warnings.
+>
+> Upstream touched none of the fork's other files this cycle, and none of the
+> 22 commits supersede an active fork change — all 11 remain necessary
+> (redundancy checks re-verified against `50c3d5d`).
+>
+> Earlier rebase (`a3a56d6`, 2026-07-25): carried 7 upstream commits —
+> raw-CLI-output/watch-mode for Docker operations, a dashboard redesign
+> (clickable tiles, volumes tile, configurable default landing page), an
+> environment-settings page/tabs redesign, appearance settings moving to the
+> user profile view, a Swarm resource-scoping/stack-deploy fix, and an updater
+> dependency bump. Zero conflicts. Upstream's dashboard landing-page work
+> rewrote `frontend/src/lib/utils/navigation.ts` and trimmed an icon import in
+> the projects `+page.svelte`; both files also carry fork change #9
+> (`shortenGitCommit`), which sits in an unrelated part of each file and merged
+> clean.
 >
 > Earlier rebase: crossed several large upstream refactors — echo v4→v5,
 > wire→fx DI, samber/mo + samber/hot adoption, unified error handling — plus a
@@ -217,9 +272,14 @@ When you rebase, work through every entry below. For each one:
   `Clone`; `TestConnection` is rewritten to call `listRemoteReferences` and match
   `plumbing.NewBranchReferenceName(branch)`, returning a `branch %q not found`
   error otherwise. Confirm `listRemoteReferences` still exists in `git.go` before
-  re-applying. Caveat: a shallow, tag-less clone means any caller that relies on
-  commit history or tags being present in the clone would break — none currently
-  do.
+  re-applying. Build the `gitutil` package after re-applying: the not-found error
+  uses `errors.Errorf` (`emperror.dev/errors`, the idiom used throughout this
+  file) and **must not** use `fmt.Errorf` — upstream removed the `fmt` import
+  from `git.go` at `5a612eb`, and because that import sits far from
+  `TestConnection`, a stale `fmt.Errorf` here replays without conflict and only
+  fails at compile time. Caveat: a shallow, tag-less clone means any caller that
+  relies on commit history or tags being present in the clone would break — none
+  currently do.
 - **Redundancy check:** Upstream `Clone` still does a full clone (no `Depth` /
   `Tags`) and `TestConnection` still clones-and-deletes — **keep**.
 
@@ -287,13 +347,16 @@ When you rebase, work through every entry below. For each one:
 
 ---
 
-## Dropped / now upstream
+## Superseded / now upstream
 
-Changes the fork used to carry that upstream has since implemented (do **not**
-re-introduce them):
+Changes the fork used to carry that upstream has since implemented
+independently. Each entry names the upstream change that replaced it. Do
+**not** re-introduce them:
 
 - **Sanitize discovered project names** *(was Active #1:
-  `project_service.go`, `project_service_test.go`)* — upstream reworked
+  `project_service.go`, `project_service_test.go`)* — **superseded by upstream
+  `0feb1007`** _(refactor: streamline project service with better reusable
+  functions (#3157))_, which reworked
   `upsertProjectForDir`. New projects are now created with
   `Name: composeMetadata.resolvedProjectName`, where `resolvedProjectName`
   defaults to `projects.NormalizeProjectName(dirName)` (compose-go
@@ -306,7 +369,9 @@ re-introduce them):
   `Name: dirName` unsanitised, which is why this was Active then.
   _Dropped at the 2026-07-07 rebase onto `b501c49`._
 - **Keep LF line endings for scripts** *(was Active #5: `.gitattributes`)* —
-  upstream now ships its own `.gitattributes` forcing `eol=lf` for `*.sh`
+  **superseded by upstream `fb0cb2e5`** _(feat: add pre-deploy hook for GitOps
+  project syncs (#3022))_, which added upstream's own
+  `.gitattributes` forcing `eol=lf` for `*.sh`
   (plus `.husky/*`, `.husky/_/*`, `Justfile`), which covers the real concern
   (bash shebangs broken by Windows `autocrlf`). The fork's `*.bash` rule
   matched no files in the tree. The only rule upstream lacks is
@@ -316,11 +381,15 @@ re-introduce them):
   fork's own file (which would conflict). _Dropped at the 2026-07-07 rebase
   onto `b501c49`._
 - **User avatar 404 when no email is set** *(was: `sidebar-user.svelte`)* —
-  upstream's `getGravatarUrl` now returns `''` early for a falsy email, so the
-  Gravatar 404 no longer occurs. The fork's `&& user?.email` guard is redundant.
+  **superseded by upstream `51977fc0`**, which extracted `sidebar-user.svelte`
+  into its own component with an `if (!email) return ''` guard at the top of
+  `getGravatarUrl`, so the Gravatar 404 no longer occurs and the fork's
+  `&& user?.email` call-site guard is redundant.
   _Dropped at the 2.0.x rebase (2026-06-13)._
 - **Toast on project form validation failure** *(was part of the project-name
-  fix, `projects/[projectId]/+page.svelte`)* — upstream's `handleSaveChanges`
+  fix, `projects/[projectId]/+page.svelte`)* — **superseded by upstream
+  `8c750764`** _(fix: project save button not showing in tree view (#2163))_,
+  whose `handleSaveChanges`
   now shows `toast.error(m.templates_validation_error())` via its own
   `hasAnyErrors` guard before the silent `if (!validated) return`, so the extra
   toast would be duplicative. _Dropped at the 2.0.x rebase (2026-06-13)._

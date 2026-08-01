@@ -264,6 +264,68 @@ func TestBuildOverrideEnvContent(t *testing.T) {
 	})
 }
 
+func TestBuildGitMetadataEnvContent(t *testing.T) {
+	const commit = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+
+	t.Run("appends metadata after existing git content", func(t *testing.T) {
+		content := BuildGitMetadataEnvContent("BASE_URL=https://example.com", commit, "main")
+
+		parsed, err := ParseProjectEnvContent(content, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "https://example.com", parsed["BASE_URL"])
+		assert.Equal(t, commit, parsed[GitCommitEnvKey])
+		assert.Equal(t, "9f2c1ab", parsed[GitCommitShortEnvKey])
+		assert.Equal(t, "main", parsed[GitBranchEnvKey])
+		assert.Contains(t, content, "BASE_URL=https://example.com\n", "existing content keeps its own line")
+	})
+
+	t.Run("wins over a repository-supplied value for the same key", func(t *testing.T) {
+		content := BuildGitMetadataEnvContent(GitCommitEnvKey+"=spoofed\n", commit, "main")
+
+		parsed, err := ParseProjectEnvContent(content, nil)
+		require.NoError(t, err)
+		assert.Equal(t, commit, parsed[GitCommitEnvKey])
+	})
+
+	t.Run("quotes branch names that need it", func(t *testing.T) {
+		content := BuildGitMetadataEnvContent("", commit, "feature/some thing")
+
+		parsed, err := ParseProjectEnvContent(content, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "feature/some thing", parsed[GitBranchEnvKey])
+	})
+
+	t.Run("omits the branch when unset and returns content unchanged without a commit", func(t *testing.T) {
+		content := BuildGitMetadataEnvContent("", commit, "  ")
+		parsed, err := ParseProjectEnvContent(content, nil)
+		require.NoError(t, err)
+		assert.NotContains(t, parsed, GitBranchEnvKey)
+
+		assert.Equal(t, "BASE_URL=https://example.com\n", BuildGitMetadataEnvContent("BASE_URL=https://example.com\n", "", "main"))
+	})
+
+	t.Run("is never promoted into the derived override", func(t *testing.T) {
+		gitContent := BuildGitMetadataEnvContent("BASE_URL=https://example.com\n", commit, "main")
+		// The effective file still carries the previous commit, as it does when a
+		// user saves the env editor while a sync moves HEAD forward.
+		staleEffective := BuildGitMetadataEnvContent("BASE_URL=https://example.com\nTOKEN=local\n", "0000000deadbeef", "main")
+
+		override, err := BuildOverrideEnvContent(gitContent, staleEffective)
+		require.NoError(t, err)
+		assert.Equal(t, "TOKEN=local\n", override)
+
+		additive, err := BuildAdditiveOverrideEnvContent(gitContent, staleEffective)
+		require.NoError(t, err)
+		assert.Equal(t, "TOKEN=local\n", additive)
+
+		effective, err := BuildEffectiveEnvContent(gitContent, override)
+		require.NoError(t, err)
+		parsed, err := ParseProjectEnvContent(effective, nil)
+		require.NoError(t, err)
+		assert.Equal(t, commit, parsed[GitCommitEnvKey])
+	})
+}
+
 func TestFormatEnvMapInternal_RoundTripsValues(t *testing.T) {
 	values := []string{
 		"$pbkdf2-sha512$310000$XXX",

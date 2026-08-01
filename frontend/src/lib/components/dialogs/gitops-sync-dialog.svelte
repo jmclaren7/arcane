@@ -96,6 +96,7 @@
 		syncDirectory: z.boolean().default(false),
 		pullImageAfterSync: z.boolean().default(false),
 		redeployAfterSync: z.boolean().default(false),
+		injectCommitEnv: z.boolean().default(false),
 		maxSyncFiles: z.coerce.number().int().nonnegative(),
 		maxSyncTotalSizeMb: z.coerce.number().int().nonnegative(),
 		maxSyncBinarySizeMb: z.coerce.number().int().nonnegative(),
@@ -155,6 +156,7 @@
 				syncDirectory: syncToEdit?.syncDirectory ?? false,
 				pullImageAfterSync: syncToEdit?.pullImageAfterSync ?? false,
 				redeployAfterSync: syncToEdit?.redeployAfterSync ?? false,
+				injectCommitEnv: syncToEdit?.injectCommitEnv ?? false,
 				maxSyncFiles,
 				maxSyncTotalSizeMb,
 				maxSyncBinarySizeMb,
@@ -260,6 +262,7 @@
 			syncDirectory: data.syncDirectory,
 			pullImageAfterSync: data.pullImageAfterSync,
 			redeployAfterSync: data.redeployAfterSync,
+			injectCommitEnv: data.injectCommitEnv,
 			maxSyncFiles: data.maxSyncFiles,
 			maxSyncTotalSize: megabytesToBytesInternal(data.maxSyncTotalSizeMb),
 			maxSyncBinarySize: megabytesToBytesInternal(data.maxSyncBinarySizeMb),
@@ -469,6 +472,19 @@
 								<p class="text-xs text-muted-foreground">{m.git_sync_redeploy_after_sync_description()}</p>
 								{#if inputs.redeployAfterSync.error}
 									<p class="text-xs font-medium text-destructive">{inputs.redeployAfterSync.error}</p>
+								{/if}
+							</div>
+						</div>
+
+						<div class="flex items-start gap-3 sm:col-span-2">
+							<Switch id="injectCommitEnvSwitch" bind:checked={inputs.injectCommitEnv.value} />
+							<div class="space-y-1">
+								<Label for="injectCommitEnvSwitch" class="mb-0 text-sm leading-none font-medium">
+									{m.git_sync_inject_commit_env()}
+								</Label>
+								<p class="text-xs text-muted-foreground">{m.git_sync_inject_commit_env_description()}</p>
+								{#if inputs.injectCommitEnv.error}
+									<p class="text-xs font-medium text-destructive">{inputs.injectCommitEnv.error}</p>
 								{/if}
 							</div>
 						</div>

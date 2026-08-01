@@ -100,6 +100,19 @@ type GitOpsSync struct {
 	SyncDirectory          bool       `json:"syncDirectory" gorm:"column:sync_directory"` // Sync entire directory containing compose file
 	PullImageAfterSync     bool       `json:"pullImageAfterSync" gorm:"column:pull_image_after_sync;default:false"`
 	RedeployAfterSync      bool       `json:"redeployAfterSync" gorm:"column:redeploy_after_sync;default:false"`
+	// InjectCommitEnv writes the synced commit into the project's env
+	// (ARCANE_GIT_COMMIT / ARCANE_GIT_COMMIT_SHORT / ARCANE_GIT_BRANCH) so the
+	// deployed application can report the commit it was deployed from. The keys
+	// land in the Git-sourced env file and merge into .env, where compose can
+	// interpolate them and the autoInjectEnv setting can hand them to every
+	// service. They are excluded from sync change detection, so a commit that
+	// leaves the synced files untouched does not force a redeploy: a running
+	// container keeps reporting the commit it was actually deployed from until
+	// the next deploy. Turning this back off drops the keys on the next sync,
+	// except for a repository that ships no .env of its own — there nothing
+	// replaces the Git-sourced env, so the last injected values stay in the
+	// project's .env until they are removed by hand.
+	InjectCommitEnv bool `json:"injectCommitEnv" gorm:"column:inject_commit_env"`
 }
 
 func (GitOpsSync) TableName() string {

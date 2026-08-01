@@ -639,6 +639,9 @@ func (s *GitOpsSyncService) CreateSync(ctx context.Context, environmentID string
 	if req.RedeployAfterSync != nil {
 		syncRecord.RedeployAfterSync = *req.RedeployAfterSync
 	}
+	if req.InjectCommitEnv != nil {
+		syncRecord.InjectCommitEnv = *req.InjectCommitEnv
+	}
 	if err := validateSyncLimits(req.MaxSyncFiles, req.MaxSyncTotalSize, req.MaxSyncBinarySize); err != nil {
 		return nil, err
 	}
@@ -759,6 +762,9 @@ func (s *GitOpsSyncService) UpdateSync(ctx context.Context, environmentID, id st
 	}
 	if req.RedeployAfterSync != nil {
 		updates["redeploy_after_sync"] = *req.RedeployAfterSync
+	}
+	if req.InjectCommitEnv != nil {
+		updates["inject_commit_env"] = *req.InjectCommitEnv
 	}
 	if err := validateSyncLimits(req.MaxSyncFiles, req.MaxSyncTotalSize, req.MaxSyncBinarySize); err != nil {
 		return nil, err
@@ -983,6 +989,10 @@ func (s *GitOpsSyncService) prepareSyncSource(ctx context.Context, sync *project
 		}
 	}
 
+	if injected, ok := gitMetadataEnvContentInternal(sync, source.envContent, commitHash); ok {
+		source.envContent = &injected
+	}
+
 	// Detect a Docker Compose override file (compose.override.yaml, etc.) sitting
 	// beside the compose file in the repo, mirroring `docker compose` behavior.
 	// Only auto-load an override when the compose file was referenced by a
@@ -1013,6 +1023,23 @@ func (s *GitOpsSyncService) prepareSyncSource(ctx context.Context, sync *project
 	return source, nil
 }
 
+// gitMetadataEnvContentInternal returns the sync's Git-sourced env content with
+// Arcane's commit metadata appended, and whether the sync opted into it. A sync
+// whose commit could not be resolved injects nothing rather than writing empty
+// values the deployed application would report as its commit.
+func gitMetadataEnvContentInternal(sync *projectpkg.GitOpsSync, gitEnvContent *string, commitHash string) (string, bool) {
+	if sync == nil || !sync.InjectCommitEnv || strings.TrimSpace(commitHash) == "" {
+		return "", false
+	}
+
+	baseContent := ""
+	if gitEnvContent != nil {
+		baseContent = *gitEnvContent
+	}
+
+	return projects.BuildGitMetadataEnvContent(baseContent, commitHash, sync.Branch), true
+}
+
 // performDirectorySync runs the directory-sync path and only triggers a
 // redeploy when an already running project's synced contents changed.
 func (s *GitOpsSyncService) performDirectorySync(ctx context.Context, sync *projectpkg.GitOpsSync, id string, actor common.User, result *gitops.SyncResult, source *preparedSyncSource) (*gitops.SyncResult, error) {
@@ -1023,7 +1050,7 @@ func (s *GitOpsSyncService) performDirectorySync(ctx context.Context, sync *proj
 		return result, s.failSync(ctx, id, result, sync, actor, "Failed to walk directory", err.Error())
 	}
 
-	project, syncedFiles, _, contentsChanged, err := s.syncProjectDirectoryInternal(ctx, sync, syncFiles, actor)
+	project, syncedFiles, _, contentsChanged, err := s.syncProjectDirectoryInternal(ctx, sync, syncFiles, source.commitHash, actor)
 	if err != nil {
 		if errors.Is(err, common.ErrGitOpsSyncProjectBindingBroken) {
 			errMsg := err.Error()
@@ -1672,6 +1699,15 @@ func envContentChangedInternal(oldEnv, newEnv string) bool {
 		return oldEnv != newEnv
 	}
 
+	// Injected commit metadata moves with every commit on the branch, including
+	// commits that touch nothing this sync manages. Redeploying on that alone
+	// would restart a project whose content is identical, so it is ignored here:
+	// a running container keeps reporting the commit it was deployed from until
+	// a real change redeploys it.
+	isGitMetadata := func(key, _ string) bool { return projects.IsGitMetadataEnvKey(key) }
+	maps.DeleteFunc(oldEnvMap, isGitMetadata)
+	maps.DeleteFunc(newEnvMap, isGitMetadata)
+
 	return !maps.Equal(oldEnvMap, newEnvMap)
 }
 
@@ -1745,8 +1781,8 @@ func (s *GitOpsSyncService) walkAndParseSyncDirectory(ctx context.Context, sync 
 
 // syncProjectDirectoryInternal runs the new directory-sync path end to end:
 // stage files, validate the staged tree, then create or update the project.
-func (s *GitOpsSyncService) syncProjectDirectoryInternal(ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile, actor common.User) (*projectpkg.Project, []string, bool, bool, error) {
-	stage, err := s.stageDirectorySyncInternal(ctx, sync, syncFiles)
+func (s *GitOpsSyncService) syncProjectDirectoryInternal(ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile, commitHash string, actor common.User) (*projectpkg.Project, []string, bool, bool, error) {
+	stage, err := s.stageDirectorySyncInternal(ctx, sync, syncFiles, commitHash)
 	if err != nil {
 		s.recordBrokenProjectBindingInternal(ctx, sync, actor, err)
 		return nil, nil, false, false, err
@@ -1777,7 +1813,7 @@ func (s *GitOpsSyncService) syncProjectDirectoryInternal(ctx context.Context, sy
 
 // stageDirectorySyncInternal builds a temporary project tree that reflects the exact
 // repo layout after sync, including cleanup of files removed from the repo.
-func (s *GitOpsSyncService) stageDirectorySyncInternal(ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile) (*stagedDirectorySync, error) {
+func (s *GitOpsSyncService) stageDirectorySyncInternal(ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile, commitHash string) (*stagedDirectorySync, error) {
 	projectsDir, err := s.projectService.GetProjectsDirectory(ctx)
 	if err != nil {
 		return nil, errors.WrapIf(err, "failed to get projects directory")
@@ -1788,6 +1824,9 @@ func (s *GitOpsSyncService) stageDirectorySyncInternal(ctx context.Context, sync
 	// overwrite — a raw .env write would silently wipe edits made in Arcane
 	// on every sync.
 	filteredSyncFiles, gitEnvContent := partitionReservedRootEnvFilesInternal(ctx, syncFiles)
+	if injected, ok := gitMetadataEnvContentInternal(sync, gitEnvContent, commitHash); ok {
+		gitEnvContent = &injected
+	}
 
 	stageLogical, err := acfs.MkdirTemp(ctx, projectsDir, "/", ".gitops-sync-stage-*")
 	if err != nil {

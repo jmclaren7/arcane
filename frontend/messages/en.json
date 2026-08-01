@@ -1873,6 +1873,8 @@
   "git_sync_redeploy_after_sync": "Redeploy After Sync",
   "git_sync_redeploy_after_sync_description": "Recreate the project's containers with freshly pulled images right after a sync changes the compose file — even if the project is currently stopped, which starts it. This goes further than Pull Image After Sync: it also recreates the running containers, similar to Portainer's \"Re-pull image\" option.",
   "git_sync_auto_sync": "Auto Sync",
+  "git_sync_inject_commit_env": "Inject Commit Variables",
+  "git_sync_inject_commit_env_description": "Write ARCANE_GIT_COMMIT, ARCANE_GIT_COMMIT_SHORT and ARCANE_GIT_BRANCH into the project's .env so compose can pass them to your services and the running app can report the commit it was deployed from.",
   "git_sync_sync_interval": "Sync Interval",
   "git_sync_sync_interval_description": "Minutes",
   "git_sync_last_sync": "Last Sync",

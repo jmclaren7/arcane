@@ -840,6 +840,70 @@ func TestGitOpsSyncService_SyncProjectDirectory_CommitOnlyChangeDoesNotRedeploy(
 	assert.Equal(t, "git", effectiveEnv["FOO"])
 }
 
+// TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsChanged
+// covers the first sync after the flag is switched on: the project gains the
+// metadata keys, so an already-running project must be redeployed for its
+// containers to receive them at all.
+func TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsChanged(t *testing.T) {
+	ctx := context.Background()
+	svc, db, projectsDir := setupGitOpsSyncDirectoryTestService(t)
+
+	composeContent := `services:
+  app:
+    image: nginx:1.27-alpine
+`
+	repoEnvContent := "FOO=git\n"
+
+	projectPath := filepath.Join(projectsDir, "demo-project")
+	require.NoError(t, os.MkdirAll(projectPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, "docker-compose.yaml"), []byte(composeContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env.git"), []byte(repoEnvContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env"), []byte(repoEnvContent), 0o644))
+
+	project := &models.Project{
+		BaseModel: models.BaseModel{ID: "proj-directory-enable-injection"},
+		Name:      "demo-project",
+		DirName:   new("demo-project"),
+		Path:      projectPath,
+		Status:    models.ProjectStatusRunning,
+	}
+	require.NoError(t, db.Create(project).Error)
+
+	oldSyncedFilesJSON, err := json.Marshal([]string{"docker-compose.yaml"})
+	require.NoError(t, err)
+
+	sync := &models.GitOpsSync{
+		BaseModel:       models.BaseModel{ID: "sync-directory-enable-injection"},
+		Name:            "demo-sync",
+		EnvironmentID:   "0",
+		RepositoryID:    "repo-1",
+		Branch:          "main",
+		ComposePath:     "apps/demo/docker-compose.yaml",
+		ProjectName:     "demo-project",
+		ProjectID:       &project.ID,
+		SyncDirectory:   true,
+		InjectCommitEnv: true,
+		SyncedFiles:     new(string(oldSyncedFilesJSON)),
+	}
+	require.NoError(t, db.Create(sync).Error)
+
+	syncFiles := []projects.SyncFile{
+		{RelativePath: "docker-compose.yaml", Content: []byte(composeContent)},
+		{RelativePath: ".env", Content: []byte(repoEnvContent)},
+	}
+
+	const commitHash = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+	updatedProject, _, created, changed, err := svc.syncProjectDirectoryInternal(ctx, sync, syncFiles, commitHash, models.User{})
+	require.NoError(t, err)
+	require.NotNil(t, updatedProject)
+	require.False(t, created)
+	assert.True(t, changed, "newly injected variables must reach running containers")
+
+	effectiveEnv, err := projects.ParseProjectEnvFile(filepath.Join(updatedProject.Path, ".env"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, commitHash, effectiveEnv[projects.GitCommitEnvKey])
+}
+
 func TestGitMetadataEnvContentInternal(t *testing.T) {
 	const commitHash = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
 	repoEnv := "FOO=git\n"
@@ -877,12 +941,30 @@ func TestGitMetadataEnvContentInternal(t *testing.T) {
 	})
 }
 
-func TestEnvContentChangedInternal_IgnoresInjectedCommitMetadata(t *testing.T) {
-	oldEnv := projects.BuildGitMetadataEnvContent("FOO=git\n", "1111111111111111111111111111111111111111", "main")
-	newEnv := projects.BuildGitMetadataEnvContent("FOO=git\n", "2222222222222222222222222222222222222222", "main")
+func TestEnvContentChangedInternal_InjectedCommitMetadata(t *testing.T) {
+	const (
+		previousCommit = "1111111111111111111111111111111111111111"
+		currentCommit  = "2222222222222222222222222222222222222222"
+	)
+	repoEnv := "FOO=git\n"
+	previousEnv := projects.BuildGitMetadataEnvContent(repoEnv, previousCommit, "main")
+	currentEnv := projects.BuildGitMetadataEnvContent(repoEnv, currentCommit, "main")
 
-	assert.False(t, envContentChangedInternal(oldEnv, newEnv))
-	assert.True(t, envContentChangedInternal(oldEnv, projects.BuildGitMetadataEnvContent("FOO=changed\n", "1111111111111111111111111111111111111111", "main")))
+	t.Run("a new commit alone is not a change", func(t *testing.T) {
+		assert.False(t, envContentChangedInternal(previousEnv, currentEnv))
+	})
+
+	t.Run("gaining the keys is a change", func(t *testing.T) {
+		assert.True(t, envContentChangedInternal(repoEnv, currentEnv), "enabling injection must reach running containers")
+	})
+
+	t.Run("losing the keys is a change", func(t *testing.T) {
+		assert.True(t, envContentChangedInternal(previousEnv, repoEnv), "disabling injection must reach running containers")
+	})
+
+	t.Run("a real env change alongside a new commit is a change", func(t *testing.T) {
+		assert.True(t, envContentChangedInternal(previousEnv, projects.BuildGitMetadataEnvContent("FOO=changed\n", currentCommit, "main")))
+	})
 }
 
 // TestGitOpsSyncService_SyncProjectDirectory_MigratesLegacyTrackedEnvOnFirstSyncAfterUpgrade

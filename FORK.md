@@ -24,7 +24,7 @@ This file is the authoritative list of changes that set this fork
 (`jmclaren7/arcane`, branch `main`) apart from upstream
 (`getarcaneapp/arcane`, branch `main`). It is written to be used by a human
 or an AI agent when **rebasing onto a newer upstream or re-applying these
-changes**.
+changes**. Implementation details are not authoritative since they might conflict with incoming changes, intent and purpose are the critical aspect of this list.
 
 When you rebase, work through every entry below. For each one:
 
@@ -110,7 +110,6 @@ When you rebase, work through every entry below. For each one:
   README line (`<div align="center">`). Keep the one-sentence summary of
   carried changes in sync with the Active list below (drop mentions of any
   change that moves to "Dropped").
-- **Redundancy check:** Upstream README has no fork banner — **keep**.
 
 ### 2. Set background early to prevent white flash
 
@@ -157,7 +156,7 @@ When you rebase, work through every entry below. For each one:
   `node_modules`, `build`, and `.svelte-kit` are still top-level only —
   **keep**.
 
-### 5. Expand contributor dev docs
+### 5. Update contributor dev docs
 
 - **Files:** `CONTRIBUTING.md`
 - **What:** Split Prerequisites into Required (Docker) and Optional (host

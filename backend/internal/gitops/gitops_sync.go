@@ -1615,12 +1615,21 @@ func envContentChangedInternal(oldEnv, newEnv string) bool {
 
 	// Injected commit metadata moves with every commit on the branch, including
 	// commits that touch nothing this sync manages. Redeploying on that alone
-	// would restart a project whose content is identical, so it is ignored here:
-	// a running container keeps reporting the commit it was deployed from until
-	// a real change redeploys it.
-	isGitMetadata := func(key, _ string) bool { return projects.IsGitMetadataEnvKey(key) }
-	maps.DeleteFunc(oldEnvMap, isGitMetadata)
-	maps.DeleteFunc(newEnvMap, isGitMetadata)
+	// would restart a project whose content is identical, so a change in the
+	// values is ignored: a running container keeps reporting the commit it was
+	// deployed from until a real change redeploys it. Gaining or losing the keys
+	// is a real change — that is injection being switched on or off, and running
+	// containers need the new environment for the toggle to take effect at all.
+	for key := range oldEnvMap {
+		if !projects.IsGitMetadataEnvKey(key) {
+			continue
+		}
+		if _, present := newEnvMap[key]; !present {
+			continue
+		}
+		delete(oldEnvMap, key)
+		delete(newEnvMap, key)
+	}
 
 	return !maps.Equal(oldEnvMap, newEnvMap)
 }

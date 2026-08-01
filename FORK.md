@@ -344,6 +344,47 @@ When you rebase, work through every entry below. For each one:
 - **Redundancy check:** Upstream's `client_transport_grpc.go` still returns
   immediately on any `Send` error, including `io.EOF` — **keep**.
 
+### 12. GitOps commit-hash injection into the synced project's env
+
+- **Files:** `backend/pkg/projects/env.go`, `backend/pkg/projects/env_test.go`,
+  `backend/internal/models/gitops_sync.go`,
+  `backend/internal/services/gitops_sync_service.go`,
+  `backend/internal/services/gitops_sync_service_test.go`,
+  `backend/internal/services/gitops_sync_service_unix_test.go`,
+  `backend/resources/migrations/{sqlite,postgres}/069_add_gitops_sync_inject_commit_env.sql`,
+  `types/gitops/gitops.go`, `frontend/src/lib/types/automation.ts`,
+  `frontend/src/lib/components/dialogs/gitops-sync-dialog.svelte`,
+  `frontend/messages/en.json`
+- **What:** Add an opt-in `injectCommitEnv` flag to a GitOps sync. When it is on,
+  the sync appends `ARCANE_GIT_COMMIT`, `ARCANE_GIT_COMMIT_SHORT` and
+  `ARCANE_GIT_BRANCH` to the Git-sourced env content it hands to the existing
+  three-file env merge (`.env.git` + `project.env` → `.env`), so compose can
+  interpolate them and the `autoInjectEnv` setting can hand them to every
+  service. `projects.BuildGitMetadataEnvContent` builds the block; the override
+  builders (`BuildOverrideEnvContent`, `BuildAdditiveOverrideEnvContent`) skip
+  the managed keys so a stale copy read back out of `.env` can never be pinned
+  into the user's override; `envContentChangedInternal` ignores them so a commit
+  that leaves the synced files untouched does not redeploy a running project.
+  Covers single-file, directory, and swarm-stack syncs — all three already
+  funnel their Git env through one place.
+- **Why:** The synced commit was already resolved and persisted
+  (`gitops_syncs.last_sync_commit`) and shown in the UI, but nothing carried it
+  into the container, so a deployed application could not report the commit it
+  was built and deployed from.
+- **Re-apply notes:** Injection has exactly two callsites, both feeding
+  `gitMetadataEnvContentInternal`: `prepareSyncSource` (covers single-file and
+  swarm, which both read `source.envContent`) and `stageDirectorySyncInternal`
+  (directory sync, whose env comes from `partitionReservedRootEnvFilesInternal`).
+  The directory path needs the commit hash threaded through
+  `syncProjectDirectoryInternal` → `stageDirectorySyncInternal`. Metadata is
+  appended *after* the repo's own env so dotenv's last-assignment-wins rule keeps
+  a repo-supplied key from spoofing it. Known corner: disabling the flag drops
+  the keys on the next sync unless the repository ships no `.env` of its own —
+  there nothing replaces the Git-sourced env, so the last injected values stay in
+  the project's `.env` until removed by hand.
+- **Redundancy check:** Upstream has no commit-injection option; its GitOps sync
+  writes only the repository's own env content — **keep**.
+
 ---
 
 ## Superseded / now upstream

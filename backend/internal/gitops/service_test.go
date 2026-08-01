@@ -880,6 +880,70 @@ func TestGitOpsSyncService_SyncProjectDirectory_CommitOnlyChangeDoesNotRedeploy(
 	assert.Equal(t, "git", effectiveEnv["FOO"])
 }
 
+// TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsChanged
+// covers the first sync after the flag is switched on: the project gains the
+// metadata keys, so an already-running project must be redeployed for its
+// containers to receive them at all.
+func TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsChanged(t *testing.T) {
+	ctx := context.Background()
+	svc, db, projectsDir := setupGitOpsSyncDirectoryTestService(t)
+
+	composeContent := `services:
+  app:
+    image: nginx:1.27-alpine
+`
+	repoEnvContent := "FOO=git\n"
+
+	projectPath := filepath.Join(projectsDir, "demo-project")
+	require.NoError(t, os.MkdirAll(projectPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, "docker-compose.yaml"), []byte(composeContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env.git"), []byte(repoEnvContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env"), []byte(repoEnvContent), 0o644))
+
+	project := &models.Project{
+		BaseModel: models.BaseModel{ID: "proj-directory-enable-injection"},
+		Name:      "demo-project",
+		DirName:   new("demo-project"),
+		Path:      projectPath,
+		Status:    models.ProjectStatusRunning,
+	}
+	require.NoError(t, db.Create(project).Error)
+
+	oldSyncedFilesJSON, err := json.Marshal([]string{"docker-compose.yaml"})
+	require.NoError(t, err)
+
+	sync := &models.GitOpsSync{
+		BaseModel:       models.BaseModel{ID: "sync-directory-enable-injection"},
+		Name:            "demo-sync",
+		EnvironmentID:   "0",
+		RepositoryID:    "repo-1",
+		Branch:          "main",
+		ComposePath:     "apps/demo/docker-compose.yaml",
+		ProjectName:     "demo-project",
+		ProjectID:       &project.ID,
+		SyncDirectory:   true,
+		InjectCommitEnv: true,
+		SyncedFiles:     new(string(oldSyncedFilesJSON)),
+	}
+	require.NoError(t, db.Create(sync).Error)
+
+	syncFiles := []projects.SyncFile{
+		{RelativePath: "docker-compose.yaml", Content: []byte(composeContent)},
+		{RelativePath: ".env", Content: []byte(repoEnvContent)},
+	}
+
+	const commitHash = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+	updatedProject, _, created, changed, err := svc.syncProjectDirectoryInternal(ctx, sync, syncFiles, commitHash, models.User{})
+	require.NoError(t, err)
+	require.NotNil(t, updatedProject)
+	require.False(t, created)
+	assert.True(t, changed, "newly injected variables must reach running containers")
+
+	effectiveEnv, err := projects.ParseProjectEnvFile(filepath.Join(updatedProject.Path, ".env"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, commitHash, effectiveEnv[projects.GitCommitEnvKey])
+}
+
 func TestGitMetadataEnvContentInternal(t *testing.T) {
 	const commitHash = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
 	repoEnv := "FOO=git\n"

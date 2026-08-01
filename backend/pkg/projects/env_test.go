@@ -581,10 +581,28 @@ func TestEnvContentChanged(t *testing.T) {
 	})
 }
 
-func TestEnvContentChangedIgnoresInjectedCommitMetadata(t *testing.T) {
-	oldEnv := BuildGitMetadataEnvContent("FOO=git\n", "1111111111111111111111111111111111111111", "main")
-	newEnv := BuildGitMetadataEnvContent("FOO=git\n", "2222222222222222222222222222222222222222", "main")
+func TestEnvContentChangedInjectedCommitMetadata(t *testing.T) {
+	const (
+		previousCommit = "1111111111111111111111111111111111111111"
+		currentCommit  = "2222222222222222222222222222222222222222"
+	)
+	repoEnv := "FOO=git\n"
+	previousEnv := BuildGitMetadataEnvContent(repoEnv, previousCommit, "main")
+	currentEnv := BuildGitMetadataEnvContent(repoEnv, currentCommit, "main")
 
-	assert.False(t, EnvContentChanged(oldEnv, newEnv))
-	assert.True(t, EnvContentChanged(oldEnv, BuildGitMetadataEnvContent("FOO=changed\n", "1111111111111111111111111111111111111111", "main")))
+	t.Run("a new commit alone is not a change", func(t *testing.T) {
+		assert.False(t, EnvContentChanged(previousEnv, currentEnv))
+	})
+
+	t.Run("gaining the keys is a change", func(t *testing.T) {
+		assert.True(t, EnvContentChanged(repoEnv, currentEnv), "enabling injection must reach running containers")
+	})
+
+	t.Run("losing the keys is a change", func(t *testing.T) {
+		assert.True(t, EnvContentChanged(previousEnv, repoEnv), "disabling injection must reach running containers")
+	})
+
+	t.Run("a real env change alongside a new commit is a change", func(t *testing.T) {
+		assert.True(t, EnvContentChanged(previousEnv, BuildGitMetadataEnvContent("FOO=changed\n", currentCommit, "main")))
+	})
 }

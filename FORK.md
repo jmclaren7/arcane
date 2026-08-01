@@ -363,8 +363,11 @@ When you rebase, work through every entry below. For each one:
   service. `projects.BuildGitMetadataEnvContent` builds the block; the override
   builders (`BuildOverrideEnvContent`, `BuildAdditiveOverrideEnvContent`) skip
   the managed keys so a stale copy read back out of `.env` can never be pinned
-  into the user's override; `envContentChangedInternal` ignores them so a commit
-  that leaves the synced files untouched does not redeploy a running project.
+  into the user's override; `envContentChangedInternal` ignores a *change in
+  their values* so a commit that leaves the synced files untouched does not
+  redeploy a running project, while gaining or losing the keys (the toggle being
+  switched on or off) still counts as a change so running containers pick the
+  new environment up.
   Covers single-file, directory, and swarm-stack syncs — all three already
   funnel their Git env through one place.
 - **Why:** The synced commit was already resolved and persisted

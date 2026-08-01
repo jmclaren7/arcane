@@ -80,7 +80,7 @@ func TestGitOpsSyncService_SyncProjectDirectory_PreservesUnreadableBindMountData
 		},
 	}
 
-	updatedProject, _, created, _, err := svc.syncProjectDirectoryInternal(ctx, sync, syncFiles, common.User{})
+	updatedProject, _, created, _, err := svc.syncProjectDirectoryInternal(ctx, sync, syncFiles, "", common.User{})
 	require.NoError(t, err)
 	require.NotNil(t, updatedProject)
 	require.False(t, created)

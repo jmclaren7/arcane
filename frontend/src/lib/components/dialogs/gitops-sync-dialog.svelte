@@ -87,6 +87,7 @@
 		branch: z.string().min(1, m.common_required()),
 		composePath: z.string().min(1, m.common_required()),
 		syncDirectory: z.boolean().default(false),
+		injectCommitEnv: z.boolean().default(false),
 		maxSyncFiles: z.coerce.number().int().nonnegative(),
 		maxSyncTotalSizeMb: z.coerce.number().int().nonnegative(),
 		maxSyncBinarySizeMb: z.coerce.number().int().nonnegative(),
@@ -128,6 +129,7 @@
 		composePath:
 			open && syncToEdit ? syncToEdit.composePath : selectedTargetType === 'swarm_stack' ? 'compose.yml' : 'docker-compose.yml',
 		syncDirectory: open && syncToEdit ? (syncToEdit.syncDirectory ?? false) : false,
+		injectCommitEnv: open && syncToEdit ? (syncToEdit.injectCommitEnv ?? false) : false,
 		maxSyncFiles: open && syncToEdit ? (syncToEdit.maxSyncFiles ?? 0) : (settingsQuery.data?.gitSyncMaxFiles ?? 0),
 		maxSyncTotalSizeMb:
 			open && syncToEdit
@@ -249,6 +251,7 @@
 			targetType: selectedTargetType,
 			projectName: data.name,
 			syncDirectory: data.syncDirectory,
+			injectCommitEnv: data.injectCommitEnv,
 			maxSyncFiles: data.maxSyncFiles,
 			maxSyncTotalSize: megabytesToBytesInternal(data.maxSyncTotalSizeMb),
 			maxSyncBinarySize: megabytesToBytesInternal(data.maxSyncBinarySizeMb),
@@ -424,6 +427,19 @@
 								<p class="text-xs text-muted-foreground">{m.common_auto_sync_description()}</p>
 								{#if $inputs.autoSync.error}
 									<p class="text-xs font-medium text-destructive">{$inputs.autoSync.error}</p>
+								{/if}
+							</div>
+						</div>
+
+						<div class="flex items-start gap-3 sm:col-span-2">
+							<Switch id="injectCommitEnvSwitch" bind:checked={$inputs.injectCommitEnv.value} />
+							<div class="space-y-1">
+								<Label for="injectCommitEnvSwitch" class="mb-0 text-sm leading-none font-medium">
+									{m.git_sync_inject_commit_env()}
+								</Label>
+								<p class="text-xs text-muted-foreground">{m.git_sync_inject_commit_env_description()}</p>
+								{#if $inputs.injectCommitEnv.error}
+									<p class="text-xs font-medium text-destructive">{$inputs.injectCommitEnv.error}</p>
 								{/if}
 							</div>
 						</div>

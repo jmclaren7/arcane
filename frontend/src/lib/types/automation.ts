@@ -125,6 +125,7 @@ export interface GitOpsSyncCreateDto {
 	autoSync?: boolean;
 	syncInterval?: number;
 	syncDirectory?: boolean;
+	injectCommitEnv?: boolean;
 	maxSyncFiles?: number;
 	maxSyncTotalSize?: number;
 	maxSyncBinarySize?: number;
@@ -146,6 +147,7 @@ export interface GitOpsSyncUpdateDto {
 	autoSync?: boolean;
 	syncInterval?: number;
 	syncDirectory?: boolean;
+	injectCommitEnv?: boolean;
 	maxSyncFiles?: number;
 	maxSyncTotalSize?: number;
 	maxSyncBinarySize?: number;
@@ -171,6 +173,7 @@ export interface GitOpsSync {
 	autoSync: boolean;
 	syncInterval: number;
 	syncDirectory: boolean;
+	injectCommitEnv: boolean;
 	syncedFiles?: string;
 	maxSyncFiles: number;
 	maxSyncTotalSize: number;

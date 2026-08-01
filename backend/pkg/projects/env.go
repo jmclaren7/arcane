@@ -29,6 +29,21 @@ const (
 	ProjectEnvModeOverride ProjectEnvMode = "override"
 )
 
+// Git metadata keys a GitOps sync writes into its project's env when commit
+// injection is enabled, so the deployed application can report the commit it
+// was deployed from. Arcane owns them: they are re-derived from the sync on
+// every run and are never promoted into the user-editable override file.
+const (
+	GitCommitEnvKey      = "ARCANE_GIT_COMMIT"
+	GitCommitShortEnvKey = "ARCANE_GIT_COMMIT_SHORT"
+	GitBranchEnvKey      = "ARCANE_GIT_BRANCH"
+)
+
+const (
+	gitCommitShortLength  = 7
+	gitMetadataEnvComment = "# Managed by Arcane: GitOps commit metadata, rewritten on every sync.\n"
+)
+
 type EnvMap = map[string]string
 
 type ProjectEnvMode string
@@ -463,6 +478,50 @@ func splitEnvValueCommentInternal(raw string) (value, comment string) {
 	return raw, ""
 }
 
+// IsGitMetadataEnvKey reports whether key is one of the Arcane-managed Git
+// metadata keys written by BuildGitMetadataEnvContent.
+func IsGitMetadataEnvKey(key string) bool {
+	switch key {
+	case GitCommitEnvKey, GitCommitShortEnvKey, GitBranchEnvKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// BuildGitMetadataEnvContent appends Arcane's Git metadata block to the
+// git-sourced env content of a synced project. The block goes last so its keys
+// win over a same-named key the repository's own .env declares — dotenv
+// resolves duplicate assignments to the last one — and it belongs in the Git
+// source file, never in the override, so every sync replaces it wholesale.
+// An empty commit yields the content unchanged.
+func BuildGitMetadataEnvContent(gitContent, commit, branch string) string {
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return gitContent
+	}
+
+	metadata := EnvMap{
+		GitCommitEnvKey:      commit,
+		GitCommitShortEnvKey: commit[:min(gitCommitShortLength, len(commit))],
+	}
+	if branch = strings.TrimSpace(branch); branch != "" {
+		metadata[GitBranchEnvKey] = branch
+	}
+
+	var builder strings.Builder
+	if gitContent != "" {
+		builder.WriteString(gitContent)
+		if !strings.HasSuffix(gitContent, "\n") {
+			builder.WriteByte('\n')
+		}
+	}
+	builder.WriteString(gitMetadataEnvComment)
+	builder.WriteString(formatEnvMapInternal(metadata))
+
+	return builder.String()
+}
+
 // BuildAdditiveOverrideEnvContent derives override content from a pre-git local
 // .env file. Like other generated env helpers, the result is normalized and does
 // not preserve comments or original key ordering.
@@ -482,9 +541,10 @@ func BuildAdditiveOverrideEnvContent(gitContent, localContent string) (string, e
 
 	override := make(EnvMap)
 	for key, value := range localEnv {
-		if _, exists := gitEnv[key]; !exists {
-			override[key] = value
+		if _, exists := gitEnv[key]; exists || IsGitMetadataEnvKey(key) {
+			continue
 		}
+		override[key] = value
 	}
 
 	return formatEnvMapInternal(override), nil
@@ -511,6 +571,12 @@ func BuildOverrideEnvContent(gitContent, effectiveContent string) (string, error
 	for key, value := range effectiveEnv {
 		gitValue, exists := gitEnv[key]
 		switch {
+		case IsGitMetadataEnvKey(key):
+			// Arcane re-derives these from the sync on every run. A copy read back
+			// out of .env must never become an override, or the value the app
+			// reports would be pinned to whichever commit was current when the
+			// env was last saved.
+			continue
 		case !exists:
 			override[key] = value
 		case value == "":

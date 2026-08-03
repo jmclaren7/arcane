@@ -2,7 +2,7 @@
 >
 > This is a development fork of [getarcaneapp/arcane](https://github.com/getarcaneapp/arcane). I develop directly on `main` here, periodically rebasing it onto upstream `main`. Container images are published to `ghcr.io/jmclaren7/arcane` and `ghcr.io/jmclaren7/arcane-agent` (tag `next`). The published images are for testing only.
 >
-> The full, up-to-date list of changes that set this fork apart from upstream — and the notes for re-applying them when rebasing — lives in **[FORK.md](FORK.md)**. In short, the fork carries a flash-of-incorrect-theme fix, Docker build-context and dev-container fixes, expanded contributor docs, CI workflows adapted to run on a fork without upstream-only infrastructure, a set of GitOps/UI refinements (honest manual-sync feedback with a per-row spinner, faster shallow git clones, abbreviated commit hashes, and a copy button that hides itself when the Clipboard API is unavailable), and an edge-agent gRPC fix for a lost-rejection-reason race.
+> The full, up-to-date list of changes that set this fork apart from upstream — and the notes for re-applying them when rebasing — lives in **[FORK.md](FORK.md)**. In short, the fork carries a flash-of-incorrect-theme fix, Docker build-context and dev-container fixes, expanded contributor docs, CI workflows adapted to run on a fork without upstream-only infrastructure, a set of GitOps/UI refinements (honest manual-sync feedback with a per-row spinner, faster shallow git clones, abbreviated commit hashes, opt-in injection of the synced commit into the project's env, and a copy button that hides itself when the Clipboard API is unavailable), and an edge-agent fix for a lost-rejection-reason race on tunnel registration.
 >
 > Upstream README below.
 >

@@ -43,38 +43,68 @@ When you rebase, work through every entry below. For each one:
 4. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Superseded" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `50c3d5d` — _fix: honor updater opt-out
-> labels during image scans (#3405)_, on 2026-07-27. _(Previously `a3a56d6`,
-> 2026-07-25.)_
+> **Last rebased onto upstream:** `c9fa64b` — _fix: forward icon catalog
+> setting over tunnel endpoints (#3495)_, on 2026-08-03. _(Previously
+> `50c3d5d`, 2026-07-27.)_
 >
-> This rebase carried 22 new upstream commits: a four-commit static-analysis
-> and error-handling sweep across the Go modules (`3938e1b`, `c89ac52`,
-> `e4a5420`, `5a612eb`), a security hardening pass on credential targets and
-> browse paths (`058f3ad`), an updates-page redesign with row/bulk/"Update All"
-> actions (`6118af4`, `30189ac`), several backend fixes (relative compose paths
-> escaping the projects mount, duplicate diagnostic log entries, unreadable
-> project directories, abandoned dashboard/activity streams), CLI/API contract
-> alignment, dependency bumps, and Crowdin translation updates. All 17 fork
-> commits replayed with **zero textual conflicts**.
+> This rebase carried 64 new upstream commits, including several structural
+> refactors: per-user passkey MFA / passwordless login (`46a0682`, which took
+> migration numbers `069`–`070`), an automation-to-actors refactor (`3bdb4e6`),
+> a gorilla→coder websocket migration (`2f1a16a`), a unified edge tunnel
+> transport lifecycle with the proto relocated to `backend/proto` (`5ea6675`),
+> a Go workspace (`go.work`, `081e297`), a backend test refactor (`de735b0`),
+> plus fixes (self-upgrade image-label refresh, image event-watcher gating,
+> serialized bulk deletes, lifecycle permission diagnostics), a gated admin
+> password-reset CLI, dependency bumps, and Crowdin updates. Three things
+> needed manual work:
 >
-> One **semantic** conflict needed a manual fix, and it is the kind a clean
-> rebase hides: upstream's `5a612eb`/`e4a5420` cleanup removed the now-unused
-> `fmt` import from `backend/pkg/gitutil/git.go` (swapping `fmt.Fprintf`
-> warnings for `slog.Warn`), while fork change #8 introduced a `fmt.Errorf`
-> call in the rewritten `TestConnection` further down the same file. The two
-> hunks don't overlap, so git replayed both happily and produced a tree that
-> **does not compile** (`undefined: fmt`). Resolved in favour of upstream — the
-> fork call now uses `errors.Errorf` from `emperror.dev/errors`, matching the
-> idiom used everywhere else in that file, rather than re-adding the import
-> upstream deliberately dropped. **Lesson for future rebases: a conflict-free
-> rebase is not a verified rebase — always build and type-check afterwards.**
-> Verified post-rebase: `go build ./...` and `go vet` clean over the whole
-> backend, `go test ./pkg/gitutil/... ./pkg/libarcane/edge/...` passing, and
-> `pnpm -C frontend check` reporting 0 errors / 0 warnings.
+> 1. **Change #11 relocated.** Upstream's `5ea6675` moved the register-send /
+>    await-registration sequence out of `connectAndServeGRPC`
+>    (`client_transport_grpc.go`) into the shared transport-agnostic
+>    `serveTunnelSessionInternal` in `client.go`. The fork's io.EOF
+>    fall-through was re-applied there — `client_transport_grpc.go` is now
+>    entirely upstream's — and as a side effect the fix now covers every
+>    transport, not just gRPC. The entry below reflects the new location.
+> 2. **Migration renumbered `069` → `071`.** Upstream's passkey work claimed
+>    `069`/`070`, colliding with the fork's
+>    `069_add_gitops_sync_inject_commit_env.sql` (change #12); Goose refuses
+>    duplicate version numbers. Renamed in both `sqlite/` and `postgres/`.
+>    **Deployment caveat:** an instance that already applied the fork's old
+>    `069` records version 69 as applied, so upstream's registry-names `069`
+>    would be skipped and the renamed `071` would fail re-adding the existing
+>    column — fix the `goose_db_version` table by hand (rename the fork's 69
+>    entry to 71) before starting the upgraded image, or start from a backup.
+> 3. **Change #12's `env.go` hunk conflicted** because upstream reordered
+>    `BuildOverrideEnvContent` after `BuildAdditiveOverrideEnvContent`; the
+>    naive replay would have duplicated `BuildOverrideEnvContent`. Resolved by
+>    inserting only the fork's new helpers and keeping upstream's copy in its
+>    new position.
 >
-> Upstream touched none of the fork's other files this cycle, and none of the
-> 22 commits supersede an active fork change — all 11 remain necessary
-> (redundancy checks re-verified against `50c3d5d`).
+> The actors and test refactors did not move change #12's callsites
+> (`prepareSyncSource` / `stageDirectorySyncInternal` still funnel through
+> `gitMetadataEnvContentInternal`), and the go-git `5.19.2` bump left change
+> #8 untouched. The fork `ci.yml` inherited upstream's loosened action pins
+> (`golangci-lint-action@v9`, `actions/cache@v6`) via clean replay;
+> `build-next-images.yml`'s `docker/login-action` pin was synced to `v4.5.2`
+> to match upstream's `release.yml` bump. Verified post-rebase:
+> `GOEXPERIMENT=jsonv2 go build ./...` and `go vet ./...` clean over the whole
+> backend, `go test ./pkg/gitutil/... ./pkg/libarcane/edge/...
+> ./pkg/projects/... ./internal/database/...` and the GitOps service tests
+> passing, and `pnpm -C frontend check` reporting 0 errors / 0 warnings. None
+> of the 64 commits supersede an active fork change — all 12 remain necessary
+> (redundancy checks re-verified against `c9fa64b`).
+>
+> Earlier rebase (`50c3d5d`, 2026-07-27): carried 22 upstream commits — a
+> four-commit static-analysis and error-handling sweep, credential-target and
+> browse-path hardening, an updates-page redesign, several backend fixes,
+> CLI/API contract alignment, dependency bumps, and Crowdin updates. All 17
+> fork commits replayed with zero textual conflicts, but one **semantic**
+> conflict produced a tree that did not compile: upstream removed the unused
+> `fmt` import from `backend/pkg/gitutil/git.go` while fork change #8's
+> replayed hunk still called `fmt.Errorf` further down the file. Resolved in
+> favour of upstream (`errors.Errorf` from `emperror.dev/errors`). **Lesson
+> for future rebases: a conflict-free rebase is not a verified rebase — always
+> build and type-check afterwards.**
 >
 > Earlier rebase (`a3a56d6`, 2026-07-25): carried 7 upstream commits —
 > raw-CLI-output/watch-mode for Docker operations, a dashboard redesign
@@ -210,8 +240,11 @@ When you rebase, work through every entry below. For each one:
   `type-check` job (`pnpm install --frozen-lockfile` + `just lint js`), and kept
   the fork's `push`/`main` triggers, `contents: read` permissions, the
   `github.ref` concurrency fallback (needed for push events), `ubuntu-latest`
-  runners, and `docker/setup-buildx-action` in `e2e-tests`. `build-next-images.yml`
-  still pins `actions/checkout@v7.0.0` and `docker/login-action@v4.4.0`.
+  runners, and `docker/setup-buildx-action` in `e2e-tests`. At the `c9fa64b`
+  rebase the fork `ci.yml` inherited upstream's loosened pins
+  (`golangci-lint-action@v9`, `actions/cache@v6`) via clean replay.
+  `build-next-images.yml` pins `actions/checkout@v7.0.0` and
+  `docker/login-action@v4.5.2` (synced to upstream's `release.yml` bump).
   The fork intentionally keeps the agent image named `arcane-agent` (not
   upstream's `arcane-headless`) because it reads better when the repo owner is
   not "Arcane"; preserve published image names so existing pullers don't break.
@@ -323,25 +356,32 @@ When you rebase, work through every entry below. For each one:
 - **Redundancy check:** Upstream `copy-button.svelte` still renders the
   disabled-button-with-tooltip fallback keyed on `isSecure` — **keep**.
 
-### 11. Surface real rejection reason on gRPC register-send race
+### 11. Surface real rejection reason on tunnel register-send race
 
-- **Files:** `backend/pkg/libarcane/edge/client_transport_grpc.go`
-- **What:** In `connectAndServeGRPC`, when the tunnel stream's `Send` of the
-  register message fails with `io.EOF`, fall through to
-  `awaitGRPCRegistrationInternal` instead of returning immediately, so the
-  real terminal status (e.g. "invalid agent token") surfaces instead of the
-  bare `"failed to send register message: EOF"`.
+- **Files:** `backend/pkg/libarcane/edge/client.go`
+- **What:** In `serveTunnelSessionInternal` (the shared register/heartbeat/
+  message lifecycle for every transport), when the tunnel connection's `Send`
+  of the register message fails with `io.EOF`, fall through to
+  `awaitRegistrationInternal` instead of returning immediately, so the real
+  terminal status (e.g. "invalid agent token") surfaces instead of the bare
+  `"failed to send grpc tunnel register message: EOF"`.
 - **Why:** Per gRPC semantics, a stream's terminal status only surfaces on
   `Recv`, not `Send` — when the manager rejects the stream before the
   client's `Send` completes, `SendMsg` returns a bare `io.EOF` and the actual
   rejection reason was lost. This also fixed the flaky
   `TestTunnelClient_connectAndServeGRPC_RegistrationRejected` test, which
   failed whenever the server's teardown won the race against `Send`.
-- **Re-apply notes:** Anchors on the `tunnelConn.Send(c.registerMessageInternal())`
-  error check in `connectAndServeGRPC`; wrap the check in
+- **Re-apply notes:** Originally applied in `connectAndServeGRPC`
+  (`client_transport_grpc.go`); upstream's `5ea6675` transport-lifecycle
+  unification moved the register/await sequence into
+  `serveTunnelSessionInternal` in `client.go`, and the fix moved with it at
+  the `c9fa64b` rebase (it now covers the websocket transport too — a
+  fall-through on a non-EOF-signalling transport is harmless because `Recv`
+  reports the close reason). Anchors on the
+  `conn.Send(c.registerMessageInternal())` error check; wrap it in
   `if !errors.Is(err, io.EOF) { return ... }` and let `io.EOF` fall through.
-  Requires the `io` import.
-- **Redundancy check:** Upstream's `client_transport_grpc.go` still returns
+  Requires the `io` import (already present in `client.go`).
+- **Redundancy check:** Upstream's `serveTunnelSessionInternal` still returns
   immediately on any `Send` error, including `io.EOF` — **keep**.
 
 ### 12. GitOps commit-hash injection into the synced project's env
@@ -351,7 +391,7 @@ When you rebase, work through every entry below. For each one:
   `backend/internal/services/gitops_sync_service.go`,
   `backend/internal/services/gitops_sync_service_test.go`,
   `backend/internal/services/gitops_sync_service_unix_test.go`,
-  `backend/resources/migrations/{sqlite,postgres}/069_add_gitops_sync_inject_commit_env.sql`,
+  `backend/resources/migrations/{sqlite,postgres}/071_add_gitops_sync_inject_commit_env.sql`,
   `types/gitops/gitops.go`, `frontend/src/lib/types/automation.ts`,
   `frontend/src/lib/components/dialogs/gitops-sync-dialog.svelte`,
   `frontend/messages/en.json`
@@ -374,7 +414,12 @@ When you rebase, work through every entry below. For each one:
   (`gitops_syncs.last_sync_commit`) and shown in the UI, but nothing carried it
   into the container, so a deployed application could not report the commit it
   was built and deployed from.
-- **Re-apply notes:** Injection has exactly two callsites, both feeding
+- **Re-apply notes:** The migration is Goose-versioned — on every rebase check
+  whether upstream has claimed the fork migration's number and, if so, rename
+  it (both dialects) to the next free number (it moved `069` → `071` at the
+  `c9fa64b` rebase when upstream's passkey work took `069`/`070`; see the
+  deployment caveat in the rebase notes above). Injection has exactly two
+  callsites, both feeding
   `gitMetadataEnvContentInternal`: `prepareSyncSource` (covers single-file and
   swarm, which both read `source.envContent`) and `stageDirectorySyncInternal`
   (directory sync, whose env comes from `partitionReservedRootEnvFilesInternal`).

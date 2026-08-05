@@ -314,6 +314,27 @@ func (pm *PathMapper) IsNonMatchingMount() bool {
 	return pm.isNonMatching
 }
 
+// IsPathMounted reports whether containerPath lies inside a directory Arcane has
+// mounted, which is what makes its host-side equivalent meaningful.
+//
+// A matching (identity) bind mount such as `-v /opt/docker:/opt/docker` hands
+// back the path it was given, exactly like a path outside every mount does, so
+// comparing ContainerToHost's result against its input cannot tell the two apart.
+func (pm *PathMapper) IsPathMounted(containerPath string) bool {
+	cleaned := filepath.Clean(containerPath)
+
+	if len(pm.mounts) > 0 {
+		_, ok := ResolveHostPath(pm.mounts, cleaned).Get()
+		return ok
+	}
+
+	rel, err := filepath.Rel(pm.containerPrefix, cleaned)
+	if err != nil || filepath.IsAbs(rel) {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // VolumeSourceKey identifies a service bind mount across two loads of the same
 // Compose input. Bind targets are unique per service, so the target is a stable
 // key even though the source is exactly what differs between the loads.
@@ -470,9 +491,16 @@ func isRemappableSourceInternal(rawSource string) bool {
 
 // hostWorkingDirInternal resolves the host-side project directory that relative
 // paths must be re-resolved against. It reports false when the project directory
-// itself is not inside a mounted directory, since there is then no host path to
-// anchor to.
+// is not inside a mounted directory, since there is then no host path to anchor
+// to, and when the mount is a matching one, since re-resolving would then
+// reproduce the paths the project already carries.
 func hostWorkingDirInternal(ctx context.Context, pathMapper projecttypes.VolumeSourcePathMapper, containerWorkingDir string) (string, bool) {
+	if !pathMapper.IsPathMounted(containerWorkingDir) {
+		slog.WarnContext(ctx, "project directory is not inside a mounted directory; relative paths outside the projects mount may resolve incorrectly",
+			"working_dir", containerWorkingDir)
+		return "", false
+	}
+
 	hostWorkingDir, err := pathMapper.ContainerToHost(containerWorkingDir)
 	if err != nil {
 		slog.WarnContext(ctx, "failed to resolve host path for project directory; relative paths outside the projects mount may resolve incorrectly",
@@ -480,9 +508,10 @@ func hostWorkingDirInternal(ctx context.Context, pathMapper projecttypes.VolumeS
 		return "", false
 	}
 
+	// A matching mount (`-v /opt/docker:/opt/docker`) resolves to the container
+	// path itself, so every relative source already holds the string the Docker
+	// host would compute. Nothing to remap, and nothing worth reporting.
 	if hostWorkingDir == "" || filepath.Clean(hostWorkingDir) == filepath.Clean(containerWorkingDir) {
-		slog.WarnContext(ctx, "project directory is not inside a mounted directory; relative paths outside the projects mount may resolve incorrectly",
-			"working_dir", containerWorkingDir)
 		return "", false
 	}
 

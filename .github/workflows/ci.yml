@@ -176,15 +176,35 @@ jobs:
       - name: Install E2E test dependencies
         run: vp -C tests install
 
-      - name: Pull and save test images
+      - name: Pull test images
         run: |
+          # nginx comes from mirror.gcr.io (Google's anonymous Docker Hub
+          # pull-through cache): public.ecr.aws rate-limits anonymous pulls per
+          # source IP, and the three E2E jobs pull it at the same time from the
+          # same runner. Any registry can still 429 under load, so retry.
+          pull_with_retry() {
+            for attempt in 1 2 3; do
+              if docker pull "$1"; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "::warning::docker pull $1 failed (attempt $attempt/3); retrying in $((attempt * 15))s"
+                sleep $((attempt * 15))
+              fi
+            done
+            echo "::error::docker pull $1 failed after 3 attempts"
+            return 1
+          }
+
+          # Upstream prefetches the browser image from its depot registry
+          # mirror; without a depot token the fork takes the public default
+          # tests/setup/docker-browser.ts falls back to.
           version="$(vp -C tests exec node -p 'require("@playwright/test/package.json").version')"
-          docker pull "$PLAYWRIGHT_DOCKER_IMAGE_REPOSITORY:v$version-noble"
-          docker pull public.ecr.aws/nginx/nginx:stable-alpine
-          docker pull public.ecr.aws/docker/library/busybox:1.37
-          docker pull cgr.dev/chainguard/minio:latest-dev@sha256:d7c906993247627c19f37fc1fa302c34cf2d209ae0e7dc7d52fb0be6ac2849ba
-          docker pull ghcr.io/rustic-rs/rustic:v0.11.2
-          docker save public.ecr.aws/nginx/nginx:stable-alpine public.ecr.aws/docker/library/busybox:1.37 > /tmp/test-images.tar
+          pull_with_retry "${PLAYWRIGHT_DOCKER_IMAGE_REPOSITORY:-mcr.microsoft.com/playwright}:v$version-noble"
+          pull_with_retry mirror.gcr.io/library/nginx:stable-alpine
+          pull_with_retry public.ecr.aws/docker/library/busybox:1.37
+          pull_with_retry cgr.dev/chainguard/minio:latest-dev@sha256:d7c906993247627c19f37fc1fa302c34cf2d209ae0e7dc7d52fb0be6ac2849ba
+          pull_with_retry ghcr.io/rustic-rs/rustic:v0.11.2
 
       - name: Run Playwright E2E tests
         run: vp -C tests exec playwright test ${{ matrix.database.playwright_projects }}

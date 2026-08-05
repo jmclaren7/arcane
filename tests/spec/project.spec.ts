@@ -1348,7 +1348,7 @@ test.describe('Project Detail Page', () => {
 		const composeContent = [
 			'services:',
 			'  web:',
-			'    image: public.ecr.aws/nginx/nginx:stable-alpine',
+			'    image: mirror.gcr.io/library/nginx:stable-alpine',
 			'    ports:',
 			'      - "127.0.0.1:8081:80"',
 			''

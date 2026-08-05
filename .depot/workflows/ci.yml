@@ -194,11 +194,28 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-playwright-
 
-      - name: Pull and save test images
+      - name: Pull test images
         run: |
-          docker pull public.ecr.aws/nginx/nginx:stable-alpine
-          docker pull ghcr.io/linuxserver/radarr:nightly
-          docker save public.ecr.aws/nginx/nginx:stable-alpine ghcr.io/linuxserver/radarr:nightly > /tmp/test-images.tar
+          # nginx comes from mirror.gcr.io (Google's anonymous Docker Hub
+          # pull-through cache): public.ecr.aws rate-limits anonymous pulls per
+          # source IP, and the three E2E jobs pull it at the same time from the
+          # same runner. Any registry can still 429 under load, so retry.
+          pull_with_retry() {
+            for attempt in 1 2 3; do
+              if docker pull "$1"; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "::warning::docker pull $1 failed (attempt $attempt/3); retrying in $((attempt * 15))s"
+                sleep $((attempt * 15))
+              fi
+            done
+            echo "::error::docker pull $1 failed after 3 attempts"
+            return 1
+          }
+
+          pull_with_retry mirror.gcr.io/library/nginx:stable-alpine
+          pull_with_retry ghcr.io/linuxserver/radarr:nightly
 
       - name: Setup and Install Playwright Dependencies
         run: just deps install tests

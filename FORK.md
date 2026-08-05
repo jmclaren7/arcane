@@ -43,11 +43,74 @@ When you rebase, work through every entry below. For each one:
 4. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Superseded" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `c9fa64b` — _fix: forward icon catalog
-> setting over tunnel endpoints (#3495)_, on 2026-08-03. _(Previously
-> `50c3d5d`, 2026-07-27.)_
+> **Last rebased onto upstream:** `60a8e663` — _chore: run deps install from
+> workflow_, on 2026-08-05. _(Previously `c9fa64b`, 2026-08-03.)_
 >
-> This rebase carried 64 new upstream commits, including several structural
+> This rebase carried 19 new upstream commits: a compose-interpolation
+> isolation fix (`b475a332`, which stops Arcane's own process environment
+> leaking into managed projects), an effective-`.env` rewrite that updates
+> overridden keys in place instead of appending duplicates (`d4480b41`),
+> custom-payload generic webhooks and Google Chat notifications (`20d0f33a`),
+> a docker/compose v5.4.0 bump with gated diverged-volume recreation
+> (`a33f047f`), password-policy enforcement on all password paths
+> (`e1c68d9e`), a default-admin-role scoping fix (`f07ceff9`), stale
+> bootstrap-API-key cleanup (`ef7814b9`), a non-HTTPS bulk-remove fix
+> (`1a1d392a`), a sheet-panel/copy-button animation fix (`5d6c07b2`), CLI
+> riscv64 self-update, dependency bumps, and Crowdin updates. Two things needed
+> manual work:
+>
+> 1. **The tunnel register-send race fix (then #11) dropped — upstream
+>    implemented it.** `ccf4bd87` (nominally a grpc `1.82.1`→`1.83.0` bump)
+>    carries the same `io.EOF` fall-through in `serveTunnelSessionInternal`,
+>    gated slightly more tightly than the fork's
+>    (`conn.Transport() != EdgeTransportGRPC || !errors.Is(err, io.EOF)`, so
+>    the fall-through applies only to the gRPC transport). Resolved in favour
+>    of upstream and moved to "Superseded / now upstream". **The GitOps
+>    commit-injection entry was renumbered #12 → #11 to close the gap**, so
+>    references to "#12" in the earlier-rebase notes below mean today's #11.
+> 2. **Change #10 conflicted** with upstream's `5d6c07b2` copy-button
+>    animation rework (`grid place-items-center` wrapper, `col-start-1
+>    row-start-1` and `out:scale` on each icon branch). Upstream's restructured
+>    markup was kept wholesale inside the `{#if canCopy}` branch and only the
+>    fork's deletion of the `{:else}` disabled-button + `Tooltip` fallback was
+>    re-applied.
+>
+> **Change #11 replayed with zero conflicts but needed semantic review**, since
+> upstream's `d4480b41` rewrote `BuildEffectiveEnvContent` in the same file to
+> merge overrides in place via a new `mergeEnvOverridesInPlaceInternal`. The
+> two are compatible: the in-place rewrite only touches Git-content lines whose
+> key appears in the *override*, and change #11 already filters the managed
+> `ARCANE_GIT_*` keys out of both override builders, so a metadata line can
+> never be rewritten from a stale override. Upstream also merged the
+> `ProjectEnvMode*` constants into the top `const` block and dropped the
+> process-env snapshot helpers; the fork's metadata `const` blocks and helpers
+> replayed around those cleanly. Upstream added **no new migrations**, so the
+> fork's `071_add_gitops_sync_inject_commit_env.sql` keeps its number and the
+> `069`/`070` deployment caveat from the previous rebase does not recur.
+> Upstream touched only `release.yml` in `.github/workflows/` (`60a8e663`,
+> `run_install: true`), which the fork leaves at upstream, so change #6 needed
+> no re-derivation this round.
+>
+> Verified post-rebase: `GOEXPERIMENT=jsonv2 go build ./...` and
+> `go vet ./...` clean over the whole backend, `go test ./pkg/projects/...
+> ./pkg/gitutil/... ./pkg/libarcane/edge/...` passing (including the fork's
+> `TestBuildGitMetadataEnvContent` alongside upstream's new in-place-rewrite
+> cases in `TestBuildEffectiveEnvContent`), all 43 GitOps service tests
+> passing, and `pnpm -C frontend check` reporting 0 errors / 0 warnings. Two
+> `internal/services` tests
+> (`TestProjectService_UpdateProject_AllowsRenameAfterJournalRecoveryDockerUnavailable`,
+> `TestProjectService_ListProjects_WithDerivedStatusFilter_AllowsAllPageSizeSentinel`)
+> fail for want of a Docker daemon; both were confirmed to fail identically on
+> pristine `upstream/main` in the same container, so they are environmental,
+> not fork regressions. Note that `go build`/`go vet` over the whole backend
+> also needs `backend/frontend/dist` to exist (it is gitignored and generated
+> by the frontend build) — without it, `frontend.go`'s `//go:embed all:dist`
+> fails on upstream too; a stub `dist/index.html` is enough to gate the build.
+> Of the 19 commits, one (`ccf4bd87`) superseded an active fork change; the
+> remaining 11 changes are all still necessary (redundancy checks re-verified
+> against `60a8e663`).
+>
+> Earlier rebase (`c9fa64b`, 2026-08-03): carried 64 new upstream commits, including several structural
 > refactors: per-user passkey MFA / passwordless login (`46a0682`, which took
 > migration numbers `069`–`070`), an automation-to-actors refactor (`3bdb4e6`),
 > a gorilla→coder websocket migration (`2f1a16a`), a unified edge tunnel
@@ -352,39 +415,19 @@ When you rebase, work through every entry below. For each one:
   single `ArcaneButton` and the disabled-button + `Tooltip` fallback is deleted.
   The `common_copy_https_required` message key is now unused by this component
   but is **still shipped upstream** (`frontend/messages/en.json`) — leave the key
-  in place, don't prune it.
+  in place, don't prune it. Upstream keeps reworking this component's markup
+  (`5d6c07b2` added a `grid place-items-center` wrapper plus `col-start-1
+  row-start-1` / `out:scale` on each icon branch), so re-apply by taking
+  upstream's button body wholesale and re-deleting only the `{:else}` branch —
+  don't force-keep the fork's copy of the button internals. Drop the
+  `import * as Tooltip` line, which becomes unused.
 - **Redundancy check:** Upstream `copy-button.svelte` still renders the
-  disabled-button-with-tooltip fallback keyed on `isSecure` — **keep**.
+  disabled-button-with-tooltip fallback keyed on `isSecure` — **keep**. Note
+  that upstream's `1a1d392a` fixed a *different* insecure-context bug (bulk
+  actions calling the secure-context-only `crypto.randomUUID`); it does not
+  touch the copy button.
 
-### 11. Surface real rejection reason on tunnel register-send race
-
-- **Files:** `backend/pkg/libarcane/edge/client.go`
-- **What:** In `serveTunnelSessionInternal` (the shared register/heartbeat/
-  message lifecycle for every transport), when the tunnel connection's `Send`
-  of the register message fails with `io.EOF`, fall through to
-  `awaitRegistrationInternal` instead of returning immediately, so the real
-  terminal status (e.g. "invalid agent token") surfaces instead of the bare
-  `"failed to send grpc tunnel register message: EOF"`.
-- **Why:** Per gRPC semantics, a stream's terminal status only surfaces on
-  `Recv`, not `Send` — when the manager rejects the stream before the
-  client's `Send` completes, `SendMsg` returns a bare `io.EOF` and the actual
-  rejection reason was lost. This also fixed the flaky
-  `TestTunnelClient_connectAndServeGRPC_RegistrationRejected` test, which
-  failed whenever the server's teardown won the race against `Send`.
-- **Re-apply notes:** Originally applied in `connectAndServeGRPC`
-  (`client_transport_grpc.go`); upstream's `5ea6675` transport-lifecycle
-  unification moved the register/await sequence into
-  `serveTunnelSessionInternal` in `client.go`, and the fix moved with it at
-  the `c9fa64b` rebase (it now covers the websocket transport too — a
-  fall-through on a non-EOF-signalling transport is harmless because `Recv`
-  reports the close reason). Anchors on the
-  `conn.Send(c.registerMessageInternal())` error check; wrap it in
-  `if !errors.Is(err, io.EOF) { return ... }` and let `io.EOF` fall through.
-  Requires the `io` import (already present in `client.go`).
-- **Redundancy check:** Upstream's `serveTunnelSessionInternal` still returns
-  immediately on any `Send` error, including `io.EOF` — **keep**.
-
-### 12. GitOps commit-hash injection into the synced project's env
+### 11. GitOps commit-hash injection into the synced project's env
 
 - **Files:** `backend/pkg/projects/env.go`, `backend/pkg/projects/env_test.go`,
   `backend/internal/models/gitops_sync.go`,
@@ -418,7 +461,9 @@ When you rebase, work through every entry below. For each one:
   whether upstream has claimed the fork migration's number and, if so, rename
   it (both dialects) to the next free number (it moved `069` → `071` at the
   `c9fa64b` rebase when upstream's passkey work took `069`/`070`; see the
-  deployment caveat in the rebase notes above). Injection has exactly two
+  deployment caveat in that rebase's notes above). Upstream added no migrations
+  at the `60a8e663` rebase, so `071` still stands and that caveat did not
+  recur. Injection has exactly two
   callsites, both feeding
   `gitMetadataEnvContentInternal`: `prepareSyncSource` (covers single-file and
   swarm, which both read `source.envContent`) and `stageDirectorySyncInternal`
@@ -441,6 +486,19 @@ Changes the fork used to carry that upstream has since implemented
 independently. Each entry names the upstream change that replaced it. Do
 **not** re-introduce them:
 
+- **Surface real rejection reason on tunnel register-send race** *(was Active
+  #11: `backend/pkg/libarcane/edge/client.go`)* — **superseded by upstream
+  `ccf4bd87`** _(chore(deps): bump google.golang.org/grpc from 1.82.1 to 1.83.0
+  in /backend (#3481))_, whose `serveTunnelSessionInternal` now performs the
+  same `io.EOF` fall-through the fork carried, so a stream the manager rejects
+  before `Send` completes reports its real terminal status from `Recv` instead
+  of a bare `"failed to send grpc tunnel register message: EOF"`. Upstream's
+  gate is tighter than the fork's — `conn.Transport() != EdgeTransportGRPC ||
+  !errors.Is(err, io.EOF)` restricts the fall-through to the gRPC transport,
+  where the EOF-on-`Send` semantics actually apply, rather than the fork's
+  transport-agnostic `!errors.Is(err, io.EOF)`. Nothing is lost by taking
+  upstream's version: the websocket transport reports its close reason through
+  `Recv` regardless. _Dropped at the 2026-08-05 rebase onto `60a8e663`._
 - **Sanitize discovered project names** *(was Active #1:
   `project_service.go`, `project_service_test.go`)* — **superseded by upstream
   `0feb1007`** _(refactor: streamline project service with better reusable

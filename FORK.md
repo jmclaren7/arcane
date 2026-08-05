@@ -520,6 +520,32 @@ When you rebase, work through every entry below. For each one:
   exists because this fork renumbered its own migration — **keep** until the
   deletion criterion above is met.
 
+### 13. E2E test images pulled from a mirror, with retries
+
+- **Files:** `.github/workflows/ci.yml`, `.depot/workflows/ci.yml`,
+  `tests/setup/project.data.ts`, `tests/spec/project.spec.ts`,
+  `tests/spec/images.spec.ts`
+- **What:** The E2E test images come from `mirror.gcr.io` (Google's anonymous
+  Docker Hub pull-through cache) instead of `public.ecr.aws`, the prefetch step
+  retries a failed pull three times with linear backoff, and the dead
+  `docker save … > /tmp/test-images.tar` was dropped — nothing has ever read
+  that tarball; the pull alone is what seeds the runner's image store. The
+  image name is referenced in three places besides the workflow, so all of them
+  move together or the prefetch stops matching what the fixtures ask for.
+- **Why:** `public.ecr.aws` rate-limits anonymous pulls per source IP, and the
+  three E2E matrix jobs pull the same image simultaneously from one runner, so
+  `toomanyrequests: Rate exceeded` failed E2E jobs repeatedly before any test
+  ran.
+- **Re-apply notes:** Upstream-agnostic and worth upstreaming; both workflow
+  files carry the identical step so they do not drift. Verify `mirror.gcr.io`
+  still serves `library/nginx:stable-alpine` and `library/alpine:3.20`
+  anonymously (manifest *and* blobs) before assuming a pull failure is
+  transient. Note `tests/setup/compose*.yaml` still pulls `postgres:18-alpine`
+  and `tecnativa/docker-socket-proxy:latest` straight from Docker Hub — the
+  same class of exposure, not yet hit, and left alone.
+- **Redundancy check:** Drop if upstream moves these pulls off `public.ecr.aws`
+  itself.
+
 ---
 
 ## Superseded / now upstream

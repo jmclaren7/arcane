@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	stdsql "database/sql"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"strconv"
@@ -200,6 +201,141 @@ func TestMigration070_PasskeysAndMFA_UpAndDown(t *testing.T) {
 	assert.Zero(t, columnCount)
 	require.NoError(t, rawDB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('user_sessions') WHERE name IN ('mfa_method', 'mfa_verified_at')`).Scan(&columnCount))
 	assert.Zero(t, columnCount)
+}
+
+// TestMigrateDatabase_RepairsPreRenumberForkMigrationState reproduces the databases
+// produced by fork builds between f3b8e1e and 130b45f, which applied the GitOps
+// commit-injection migration as version 69 before it was renumbered to 071. Such a
+// database has inject_commit_env already (so 071 aborts with "duplicate column name")
+// and is missing container_registries.repository_names (because Goose treated
+// upstream's 069 as applied and skipped it).
+func TestMigrateDatabase_RepairsPreRenumberForkMigrationState(t *testing.T) {
+	testCases := []struct {
+		name           string
+		reachedVersion int64
+	}{
+		// The database never left the pre-renumber build.
+		{name: "left at the pre-renumber version", reachedVersion: forkCommitEnvPreRenumberVersion},
+		// The database was started once on a renumbered build: 070 applied, 071 failed.
+		{name: "already advanced past 070", reachedVersion: forkCommitEnvMigrationVersion - 1},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			rawDB, dsn := newSQLiteSQLDBInternal(t, t.TempDir(), "arcane-pre-renumber.db")
+			seedPreRenumberForkDatabaseInternal(t, ctx, rawDB)
+
+			if testCase.reachedVersion > forkCommitEnvPreRenumberVersion {
+				require.NoError(t, migrateDatabaseToVersionInternal(ctx, rawDB, dbProviderSQLite, MigrationOptions{}, testCase.reachedVersion))
+				// Goose keys on the version number alone, so upstream's 069 was skipped.
+				assert.False(t, sqliteColumnExistsInternal(t, rawDB, "container_registries", "repository_names"))
+			}
+			require.Equal(t, testCase.reachedVersion, readGooseSQLiteVersionInternal(t, dsn))
+
+			require.NoError(t, migrateDatabaseInternal(ctx, rawDB, dbProviderSQLite, MigrationOptions{}))
+
+			highestVersion, err := getHighestEmbeddedMigrationVersionInternal(dbProviderSQLite)
+			require.NoError(t, err)
+			assert.Equal(t, highestVersion, readGooseSQLiteVersionInternal(t, dsn))
+
+			// The repair must leave the same schema a from-scratch migration produces,
+			// including the skipped 069 column and 070's passkey tables.
+			freshDB, _ := newSQLiteSQLDBInternal(t, t.TempDir(), "arcane-fresh.db")
+			require.NoError(t, migrateDatabaseInternal(ctx, freshDB, dbProviderSQLite, MigrationOptions{}))
+			for _, table := range []string{"container_registries", "gitops_syncs", "users", "user_sessions", "passkeys"} {
+				assert.Equal(t, sqliteTableColumnsInternal(t, freshDB, table), sqliteTableColumnsInternal(t, rawDB, table),
+					"repaired schema for %s differs from a database migrated from scratch", table)
+			}
+
+			// The opt-in the operator had already set must survive the repair.
+			var injectCommitEnv bool
+			require.NoError(t, rawDB.QueryRow(`SELECT inject_commit_env FROM gitops_syncs WHERE id = 'sync-1'`).Scan(&injectCommitEnv))
+			assert.True(t, injectCommitEnv)
+
+			// Running again is a no-op rather than a second repair.
+			require.NoError(t, migrateDatabaseInternal(ctx, rawDB, dbProviderSQLite, MigrationOptions{}))
+			assert.Equal(t, highestVersion, readGooseSQLiteVersionInternal(t, dsn))
+		})
+	}
+}
+
+// TestMigrateDatabase_LeavesUnaffectedDatabaseAlone proves the repair never fires on a
+// database that reached version 70 without the pre-renumber fork build, which must
+// apply 071 through Goose as usual.
+func TestMigrateDatabase_LeavesUnaffectedDatabaseAlone(t *testing.T) {
+	ctx := context.Background()
+	rawDB, dsn := newSQLiteSQLDBInternal(t, t.TempDir(), "arcane-unaffected.db")
+
+	require.NoError(t, migrateDatabaseToVersionInternal(ctx, rawDB, dbProviderSQLite, MigrationOptions{}, forkCommitEnvMigrationVersion-1))
+	assert.True(t, sqliteColumnExistsInternal(t, rawDB, "container_registries", "repository_names"))
+	assert.False(t, sqliteColumnExistsInternal(t, rawDB, "gitops_syncs", "inject_commit_env"))
+
+	require.NoError(t, migrateDatabaseInternal(ctx, rawDB, dbProviderSQLite, MigrationOptions{}))
+
+	highestVersion, err := getHighestEmbeddedMigrationVersionInternal(dbProviderSQLite)
+	require.NoError(t, err)
+	assert.Equal(t, highestVersion, readGooseSQLiteVersionInternal(t, dsn))
+	assert.True(t, sqliteColumnExistsInternal(t, rawDB, "gitops_syncs", "inject_commit_env"))
+}
+
+// seedPreRenumberForkDatabaseInternal migrates to 068 and then replays what the
+// pre-renumber fork build did: it applied the commit-injection migration's Up section
+// and recorded it as version 69, the number upstream later gave to
+// 069_add_container_registry_repository_names.sql.
+func seedPreRenumberForkDatabaseInternal(t *testing.T, ctx context.Context, db *stdsql.DB) {
+	t.Helper()
+
+	require.NoError(t, migrateDatabaseToVersionInternal(ctx, db, dbProviderSQLite, MigrationOptions{}, forkCommitEnvPreRenumberVersion-1))
+
+	migrationsFS, err := embeddedMigrationFSInternal(dbProviderSQLite)
+	require.NoError(t, err)
+	content, err := fs.ReadFile(migrationsFS, "071_add_gitops_sync_inject_commit_env.sql")
+	require.NoError(t, err)
+	up, _ := gooseUpDownSectionsInternal(string(content))
+
+	_, err = db.ExecContext(ctx, up)
+	require.NoError(t, err)
+	require.NoError(t, insertGooseMigrationVersionInternal(ctx, db, dbProviderSQLite, forkCommitEnvPreRenumberVersion))
+
+	_, err = db.ExecContext(ctx, `INSERT INTO environments (id, api_url, status, enabled) VALUES ('env-1', 'http://localhost', 'online', TRUE)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO git_repositories (id, name, url, auth_type) VALUES ('repo-1', 'lab', 'https://example.test/lab.git', 'none')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+INSERT INTO gitops_syncs (id, name, environment_id, repository_id, branch, compose_path, project_name, created_at, updated_at, inject_commit_env)
+VALUES ('sync-1', 'lab', 'env-1', 'repo-1', 'main', 'compose.yaml', 'lab', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, TRUE)`)
+	require.NoError(t, err)
+}
+
+func sqliteColumnExistsInternal(t *testing.T, db *stdsql.DB, table, column string) bool {
+	t.Helper()
+
+	var count int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&count))
+	return count > 0
+}
+
+func sqliteTableColumnsInternal(t *testing.T, db *stdsql.DB, table string) []string {
+	t.Helper()
+
+	rows, err := db.Query(`SELECT name, type, "notnull", COALESCE(dflt_value, '') FROM pragma_table_info(?) ORDER BY name`, table)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, rows.Close())
+	}()
+
+	var columns []string
+	for rows.Next() {
+		var name, columnType, defaultValue string
+		var notNull int
+		require.NoError(t, rows.Scan(&name, &columnType, &notNull, &defaultValue))
+		columns = append(columns, fmt.Sprintf("%s %s notnull=%d default=%s", name, columnType, notNull, defaultValue))
+	}
+	require.NoError(t, rows.Err())
+	require.NotEmpty(t, columns, "table %s has no columns", table)
+
+	return columns
 }
 
 func TestMigrateDatabase_BlocksFutureGooseVersionWithoutFlag(t *testing.T) {

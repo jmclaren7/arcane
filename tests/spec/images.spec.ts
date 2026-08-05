@@ -368,9 +368,7 @@ test.describe('Images Page', () => {
 		const dialogHeading = page.getByRole('heading', { name: 'Pull Image' });
 		await expect(dialogHeading).toBeVisible();
 
-		await page
-			.getByRole('textbox', { name: 'Image Name *' })
-			.fill('public.ecr.aws/docker/library/alpine');
+		await page.getByRole('textbox', { name: 'Image Name *' }).fill('mirror.gcr.io/library/alpine');
 		await page.getByRole('textbox', { name: 'Tag' }).fill('3.20');
 
 		await page.getByRole('button', { name: 'Pull', exact: true }).click();

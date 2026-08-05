@@ -1,7 +1,9 @@
 package projects
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"path/filepath"
 	"testing"
 
@@ -230,4 +232,92 @@ func TestRemapEscapedRelativeSources_MountTableTakesPrecedence(t *testing.T) {
 	volumes := project.Services["goclaw"].Volumes
 	assert.Equal(t, "/mnt/media", volumes[0].Source, "nested independent mount must win over the host project directory")
 	assert.Equal(t, "/docker/112/goclaw/data", volumes[1].Source)
+}
+
+func TestPathMapper_IsPathMounted(t *testing.T) {
+	fromMounts := NewPathMapperFromMounts([]HostMount{
+		{Destination: "/opt/docker", Source: "/opt/docker"},
+		{Destination: "/app/data", Source: "/var/lib/docker/volumes/arcane-data/_data"},
+	})
+	assert.True(t, fromMounts.IsPathMounted("/opt/docker/api-server"), "a matching mount is still a mount")
+	assert.True(t, fromMounts.IsPathMounted("/app/data/projects/demo"))
+	assert.False(t, fromMounts.IsPathMounted("/srv/elsewhere/demo"))
+
+	prefixed := NewPathMapper("/app/data/projects", "/host/projects")
+	assert.True(t, prefixed.IsPathMounted("/app/data/projects/demo"))
+	assert.False(t, prefixed.IsPathMounted("/etc/hosts"))
+}
+
+// A matching (identity) bind mount such as `-v /opt/docker:/opt/docker` resolves
+// every project directory to itself. Arcane's own named-volume mount still makes
+// the table non-matching, so the remapper runs — and it must not mistake the
+// unchanged path for a project directory that was never mounted.
+func TestRemapEscapedRelativeSources_MatchingMountIsNotReportedAsUnmounted(t *testing.T) {
+	logBuffer := captureWarningsInternal(t)
+
+	pm := NewPathMapperFromMounts([]HostMount{
+		{Destination: "/var/run/docker.sock", Source: "/var/run/docker.sock"},
+		{Destination: "/opt/docker", Source: "/opt/docker"},
+		{Destination: "/app/data", Source: "/var/lib/docker/volumes/arcane-data/_data"},
+	})
+	require.True(t, pm.IsNonMatchingMount())
+
+	project := &composetypes.Project{
+		Services: composetypes.Services{
+			"api": {
+				Name: "api",
+				Volumes: []composetypes.ServiceVolumeConfig{
+					{Type: composetypes.VolumeTypeBind, Source: "/opt/docker/api-server/data", Target: "/data"},
+				},
+			},
+		},
+	}
+	rawSources := map[string]string{VolumeSourceKey("api", "/data"): "./data"}
+
+	require.NoError(t, pm.TranslateVolumeSources(project, true))
+	RemapEscapedRelativeSources(context.Background(), pm, project, "/opt/docker/api-server", rawSources, true)
+
+	assert.Equal(t, "/opt/docker/api-server/data", project.Services["api"].Volumes[0].Source)
+	assert.NotContains(t, logBuffer.String(), "not inside a mounted directory")
+}
+
+// The warning still has to fire for the case it was written for: a project
+// directory that really is outside every mount, where a relative source that
+// escapes it cannot be anchored to a host path.
+func TestRemapEscapedRelativeSources_UnmountedProjectDirIsReported(t *testing.T) {
+	logBuffer := captureWarningsInternal(t)
+
+	pm := NewPathMapperFromMounts([]HostMount{
+		{Destination: "/app/data", Source: "/host/arcane-data"},
+	})
+	require.True(t, pm.IsNonMatchingMount())
+
+	project := &composetypes.Project{
+		Services: composetypes.Services{
+			"api": {
+				Name: "api",
+				Volumes: []composetypes.ServiceVolumeConfig{
+					{Type: composetypes.VolumeTypeBind, Source: "/srv/projects/shared", Target: "/data"},
+				},
+			},
+		},
+	}
+	rawSources := map[string]string{VolumeSourceKey("api", "/data"): "../shared"}
+
+	require.NoError(t, pm.TranslateVolumeSources(project, true))
+	RemapEscapedRelativeSources(context.Background(), pm, project, "/srv/projects/demo", rawSources, true)
+
+	assert.Equal(t, "/srv/projects/shared", project.Services["api"].Volumes[0].Source)
+	assert.Contains(t, logBuffer.String(), "not inside a mounted directory")
+}
+
+func captureWarningsInternal(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	buffer := &bytes.Buffer{}
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buffer, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	return buffer
 }

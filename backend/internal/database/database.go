@@ -220,11 +220,136 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 		return nil
 	}
 
+	if err := repairPreRenumberForkMigrationInternal(ctx, db, dbProvider, provider, currentVersion, requiredVersion); err != nil {
+		return err
+	}
+
 	if _, err := provider.UpTo(ctx, requiredVersion); err != nil {
 		return errors.WrapIff(err, "failed to apply embedded Goose migrations for %s", dbProvider)
 	}
 
 	slog.Info("Database migrations completed successfully", "provider", dbProvider, "targetVersion", requiredVersion)
+	return nil
+}
+
+// This fork briefly shipped its GitOps commit-injection migration as version 069
+// (fork commits f3b8e1e..130b45f, 2026-08-01..2026-08-03). Upstream then claimed
+// 069 (container_registries.repository_names) and 070 (passkeys/MFA), so the fork
+// migration was renumbered to 071. Goose keys its bookkeeping on the version number
+// alone, so a database migrated by a build from that window is wrong in two ways:
+//
+//  1. Version 69 is recorded, but it was the *fork's* migration that ran. Upstream's
+//     069 is therefore treated as applied and silently skipped, leaving
+//     container_registries.repository_names missing — every registry query then fails
+//     with "no such column".
+//  2. gitops_syncs.inject_commit_env already exists, so 071 aborts with
+//     "duplicate column name: inject_commit_env" and Arcane refuses to start.
+//
+// repairPreRenumberForkMigrationInternal detects that state and repairs both, in
+// place and without touching the operator's data. It runs outside Goose's Postgres
+// session lock, which is harmless: a second instance re-runs the same checks and
+// finds nothing to do, and the worst a genuine race can leave behind is a duplicate
+// version row, which Goose collapses when it reads its state. It can be deleted once
+// no pre-renumber database is left in the wild.
+const (
+	forkCommitEnvMigrationVersion   int64 = 71
+	forkCommitEnvPreRenumberVersion int64 = 69
+)
+
+func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbProvider string, provider *goose.Provider, currentVersion, requiredVersion int64) error {
+	if requiredVersion < forkCommitEnvMigrationVersion || currentVersion >= forkCommitEnvMigrationVersion {
+		return nil
+	}
+
+	needsRepair, err := hasPreRenumberForkMigrationStateInternal(ctx, db, dbProvider, currentVersion)
+	if err != nil || !needsRepair {
+		return err
+	}
+
+	slog.Warn("Detected a database migrated by a pre-renumber fork build; repairing migration state",
+		"provider", dbProvider, "currentVersion", currentVersion, "forkMigrationVersion", forkCommitEnvMigrationVersion)
+
+	// Everything below the fork migration has to be applied first: recording version
+	// 71 below raises the Goose version past 070, after which UpTo would skip it.
+	belowForkVersion := forkCommitEnvMigrationVersion - 1
+	if currentVersion < belowForkVersion {
+		if _, err := provider.UpTo(ctx, belowForkVersion); err != nil {
+			return errors.WrapIff(err, "failed to apply embedded Goose migrations up to version %d for %s while repairing pre-renumber fork migration state", belowForkVersion, dbProvider)
+		}
+	}
+
+	repositoryNamesPresent, err := columnExistsInternal(ctx, db, dbProvider, "container_registries", "repository_names")
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.WrapIff(err, "failed to start pre-renumber fork migration repair transaction for %s", dbProvider)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if !repositoryNamesPresent {
+		if err := addSkippedRegistryRepositoryNamesColumnInternal(ctx, tx, dbProvider); err != nil {
+			return err
+		}
+	}
+
+	// The column 071 adds is already present, so record it as applied rather than
+	// re-running its DDL, which would fail on the duplicate column.
+	if err := insertGooseMigrationVersionInternal(ctx, tx, dbProvider, forkCommitEnvMigrationVersion); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return errors.WrapIff(err, "failed to commit pre-renumber fork migration repair for %s", dbProvider)
+	}
+
+	slog.Info("Repaired pre-renumber fork migration state",
+		"provider", dbProvider, "forkMigrationVersion", forkCommitEnvMigrationVersion, "restoredSkippedMigration", !repositoryNamesPresent)
+	return nil
+}
+
+// hasPreRenumberForkMigrationStateInternal reports whether gitops_syncs.inject_commit_env
+// exists without version 71 being recorded — the signature of a fork build that applied
+// that migration under its old version number.
+func hasPreRenumberForkMigrationStateInternal(ctx context.Context, db *sql.DB, dbProvider string, currentVersion int64) (bool, error) {
+	if currentVersion < forkCommitEnvPreRenumberVersion {
+		return false, nil
+	}
+
+	gooseStateExists, err := gooseVersionTableExistsInternal(ctx, db, dbProvider)
+	if err != nil || !gooseStateExists {
+		return false, err
+	}
+
+	forkVersionApplied, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvMigrationVersion)
+	if err != nil || forkVersionApplied {
+		return false, err
+	}
+
+	return columnExistsInternal(ctx, db, dbProvider, "gitops_syncs", "inject_commit_env")
+}
+
+// addSkippedRegistryRepositoryNamesColumnInternal replays the one statement of
+// 069_add_container_registry_repository_names.sql, which Goose skipped because the
+// pre-renumber fork build had already recorded version 69.
+func addSkippedRegistryRepositoryNamesColumnInternal(ctx context.Context, execer sqlExecerInternal, dbProvider string) error {
+	var query string
+	switch dbProvider {
+	case dbProviderSQLite:
+		query = `ALTER TABLE container_registries ADD COLUMN repository_names TEXT NOT NULL DEFAULT '[]'`
+	case dbProviderPostgres:
+		query = `ALTER TABLE container_registries ADD COLUMN IF NOT EXISTS repository_names TEXT NOT NULL DEFAULT '[]'`
+	default:
+		return errors.Errorf("unsupported database provider: %s", dbProvider)
+	}
+
+	if _, err := execer.ExecContext(ctx, query); err != nil {
+		return errors.WrapIff(err, "failed to restore skipped container_registries.repository_names column for %s", dbProvider)
+	}
 	return nil
 }
 
@@ -421,6 +546,41 @@ func gooseVersionTableHasAppliedMigrationsInternal(ctx context.Context, db *sql.
 		return false, errors.WrapIff(err, "failed to read Goose migration state for %s", dbProvider)
 	}
 	return version > 0, nil
+}
+
+func gooseMigrationVersionAppliedInternal(ctx context.Context, db *sql.DB, dbProvider string, version int64) (bool, error) {
+	queryFormat := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE is_applied = %s AND version_id = %%s", gooseVersionTable, appliedLiteralInternal(dbProvider))
+	query, args, err := sqlWithProviderPlaceholderInternal(dbProvider, queryFormat, version)
+	if err != nil {
+		return false, err
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return false, errors.WrapIff(err, "failed to check Goose migration version %d for %s", version, dbProvider)
+	}
+	return count > 0, nil
+}
+
+// columnExistsInternal reports whether a column exists, returning false rather than an
+// error when the table itself is absent.
+func columnExistsInternal(ctx context.Context, db *sql.DB, dbProvider, table, column string) (bool, error) {
+	switch dbProvider {
+	case dbProviderSQLite:
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&count); err != nil {
+			return false, errors.WrapIff(err, "failed to inspect column %s.%s for sqlite", table, column)
+		}
+		return count > 0, nil
+	case dbProviderPostgres:
+		var exists bool
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2)`, table, column).Scan(&exists); err != nil {
+			return false, errors.WrapIff(err, "failed to inspect column %s.%s for postgres", table, column)
+		}
+		return exists, nil
+	default:
+		return false, errors.Errorf("unsupported database provider: %s", dbProvider)
+	}
 }
 
 func gooseVersionTableExistsInternal(ctx context.Context, db *sql.DB, dbProvider string) (bool, error) {

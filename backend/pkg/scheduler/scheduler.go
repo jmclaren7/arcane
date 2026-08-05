@@ -351,9 +351,14 @@ func (js *jobSchedulerInternal) upsertJobInternal(ctx context.Context, state *sc
 	state.jobsByID[jobName] = job
 	state.schedules[jobName] = schedule
 
-	if previousSchedule == "" && shouldSchedule {
+	switch {
+	case previousSchedule == "" && shouldSchedule:
 		slog.InfoContext(ctx, "Starting Job", "name", jobName, "schedule", schedule)
-	} else if previousSchedule != schedule || hadPreviousEntry != shouldSchedule {
+	case !hadPreviousEntry && !shouldSchedule:
+		// A disabled job that was never scheduled has not been rescheduled — it
+		// only ever recorded the cron expression it would use once enabled. The
+		// "Job disabled; not scheduling" debug line above already covers it.
+	case previousSchedule != schedule || hadPreviousEntry != shouldSchedule:
 		slog.InfoContext(ctx, "Job rescheduled", "name", jobName, "previousSchedule", previousSchedule, "newSchedule", schedule, "nextRun", nextRun)
 	}
 	slog.DebugContext(ctx, "Job scheduled", "name", jobName, "scheduled", shouldSchedule, "contextCanceled", ctx.Err() != nil)

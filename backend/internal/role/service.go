@@ -117,6 +117,7 @@ func (s *RoleService) BackfillLegacyRoleAssignments(ctx context.Context) error {
 		if err := tx.Table("users").Select("id, roles").Scan(&rows).Error; err != nil {
 			return errors.WrapIf(err, "failed to read legacy users.roles for backfill")
 		}
+		var assignmentCount int64
 		for _, u := range rows {
 			roleID := authz.BuiltInRoleViewer
 			if legacyRolesContainsAdminInternal(u.Roles) {
@@ -127,11 +128,22 @@ func (s *RoleService) BackfillLegacyRoleAssignments(ctx context.Context) error {
 				RoleID: roleID,
 				Source: RoleAssignmentSourceManual,
 			}
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&assignment).Error; err != nil {
-				return errors.WrapIff(err, "failed to backfill assignment for user %s", u.ID)
+			result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&assignment)
+			if result.Error != nil {
+				return errors.WrapIff(result.Error, "failed to backfill assignment for user %s", u.ID)
 			}
+			assignmentCount += result.RowsAffected
 		}
-		slog.InfoContext(ctx, "Backfilled legacy users.roles into user_role_assignments", "userCount", len(rows))
+
+		// Every boot re-runs this while the legacy column survives, and the
+		// conflict clause turns all but the first into a no-op. Announcing a
+		// backfill that inserted nothing just makes startup logs look eventful.
+		if assignmentCount == 0 {
+			slog.DebugContext(ctx, "Legacy users.roles already backfilled into user_role_assignments", "userCount", len(rows))
+			return nil
+		}
+
+		slog.InfoContext(ctx, "Backfilled legacy users.roles into user_role_assignments", "userCount", len(rows), "assignmentCount", assignmentCount)
 		return nil
 	})
 }

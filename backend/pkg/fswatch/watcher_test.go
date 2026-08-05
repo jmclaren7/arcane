@@ -213,6 +213,62 @@ func TestWatcher_StartFiresOnComposeFileDroppedIntoNewlyCreatedDirectory(t *test
 	}
 }
 
+// A GitOps sync stages the project — compose file included — into a scratch
+// directory alongside it, and backs the live copy up the same way. Both writes
+// are Arcane's own, and the discovery walker never imports those directories, so
+// they must not wake the sync loop either.
+func TestWatcher_IgnoresArcaneScratchDirectories(t *testing.T) {
+	root := t.TempDir()
+	existingScratch := filepath.Join(root, ".gitops-backup-1780656786384743013")
+	require.NoError(t, os.MkdirAll(existingScratch, 0o755))
+
+	changeCh := make(chan struct{}, 1)
+	ctx := t.Context()
+
+	watcher, err := NewWatcher(root, WatcherOptions{
+		Debounce: 25 * time.Millisecond,
+		MaxDepth: 0,
+		OnChange: func(context.Context) {
+			select {
+			case changeCh <- struct{}{}:
+			default:
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, watcher.Start(ctx))
+	defer func() {
+		require.NoError(t, watcher.Stop())
+	}()
+
+	// Attached at startup (existing) and on creation (new) — neither may fire.
+	newScratch := filepath.Join(root, ".gitops-sync-stage-1219810203")
+	require.NoError(t, os.MkdirAll(newScratch, 0o755))
+	time.Sleep(100 * time.Millisecond)
+
+	for _, scratch := range []string{existingScratch, newScratch} {
+		require.NoError(t, os.WriteFile(filepath.Join(scratch, "compose.yaml"), []byte("services: {}\n"), 0o644))
+	}
+
+	select {
+	case <-changeCh:
+		require.FailNow(t, "did not expect writes inside an Arcane scratch directory to trigger watcher callback")
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// The exclusion is narrow: a real project directory still fires.
+	projectDir := filepath.Join(root, "demo")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "compose.yaml"), []byte("services: {}\n"), 0o644))
+
+	select {
+	case <-changeCh:
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "expected compose file in a real project directory to trigger watcher callback")
+	}
+}
+
 func TestWatcher_StartSkipsExistingSymlinkDirectoriesWhenDisabled(t *testing.T) {
 	root := t.TempDir()
 	targetRoot := t.TempDir()

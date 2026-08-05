@@ -12,6 +12,10 @@ type VolumeSourcePathMapper interface {
 	// directory. Needed to re-resolve relative Compose paths that escape the
 	// projects mount, where prefix translation has nothing to match.
 	ContainerToHost(containerPath string) (string, error)
+	// IsPathMounted reports whether a container-side path lies inside a mounted
+	// directory. A matching mount translates a path to itself, so this is the
+	// only way to tell "mounted, unchanged" from "outside every mount".
+	IsPathMounted(containerPath string) bool
 }
 
 // ComposeContentOptions configures loading a Compose project from in-memory content.

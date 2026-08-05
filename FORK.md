@@ -137,6 +137,11 @@ When you rebase, work through every entry below. For each one:
 >    would be skipped and the renamed `071` would fail re-adding the existing
 >    column — fix the `goose_db_version` table by hand (rename the fork's 69
 >    entry to 71) before starting the upgraded image, or start from a backup.
+>    **Superseded on 2026-08-05 by change #12**, which repairs such a database
+>    automatically at startup. Do not follow the hand-fix above: renaming the
+>    row to 71 on its own raises the Goose version straight to the target, so
+>    upstream's registry-names `069` stays unapplied — and on a database that
+>    had not yet reached 70, the passkey `070` is skipped too.
 > 3. **Change #12's `env.go` hunk conflicted** because upstream reordered
 >    `BuildOverrideEnvContent` after `BuildAdditiveOverrideEnvContent`; the
 >    naive replay would have duplicated `BuildOverrideEnvContent`. Resolved by
@@ -461,7 +466,8 @@ When you rebase, work through every entry below. For each one:
   whether upstream has claimed the fork migration's number and, if so, rename
   it (both dialects) to the next free number (it moved `069` → `071` at the
   `c9fa64b` rebase when upstream's passkey work took `069`/`070`; see the
-  deployment caveat in that rebase's notes above). Upstream added no migrations
+  deployment caveat in that rebase's notes above, now automated as change #12 —
+  renumbering again means updating its constants). Upstream added no migrations
   at the `60a8e663` rebase, so `071` still stands and that caveat did not
   recur. Injection has exactly two
   callsites, both feeding
@@ -477,6 +483,42 @@ When you rebase, work through every entry below. For each one:
   the project's `.env` until removed by hand.
 - **Redundancy check:** Upstream has no commit-injection option; its GitOps sync
   writes only the repository's own env content — **keep**.
+
+### 12. One-time repair for databases migrated by a pre-renumber fork build
+
+- **Files:** `backend/internal/database/database.go`,
+  `backend/internal/database/database_test.go`
+- **What:** Before running Goose upwards, detect a database that applied change
+  #11's migration under its *old* number (`069`, shipped by fork builds between
+  `f3b8e1e` and `130b45f`) and repair it in place:
+  `repairPreRenumberForkMigrationInternal` fires when
+  `gitops_syncs.inject_commit_env` exists while version `71` is unrecorded, adds
+  the `container_registries.repository_names` column that upstream's `069` never
+  got to add, and records `71` as applied instead of re-running its DDL. It
+  applies everything below `71` through Goose first, so a database still sitting
+  at `69` does not skip `070` when the bookkeeping row lands.
+- **Why:** Goose keys its bookkeeping on the version number alone, so a database
+  carrying the fork's old `069` is broken in two ways on any later build: `071`
+  aborts with `duplicate column name: inject_commit_env` and Arcane refuses to
+  start, and upstream's `069` was silently treated as applied, leaving container
+  registry queries failing with `no such column: repository_names`. This is the
+  automated form of the hand-fix the `c9fa64b` rebase note described.
+- **Re-apply notes:** Purely fork debt from change #11's renumbering — nothing
+  upstream will ever conflict with, though it sits in a file upstream does edit.
+  The two constants (`forkCommitEnvMigrationVersion`,
+  `forkCommitEnvPreRenumberVersion`) must be kept in step if a future rebase
+  renumbers change #11's migration again: the *pre-renumber* constant stays `69`
+  (that is the historical fact being repaired), only the current number moves.
+  `addSkippedRegistryRepositoryNamesColumnInternal` duplicates the single
+  statement of `069_add_container_registry_repository_names.sql`; the test
+  compares a repaired database's schema against a from-scratch migration, so
+  drift is caught rather than shipped. **Delete the whole thing** — repair,
+  constants, the two tests, and the README's closing sentence about it — once no
+  pre-renumber database is left running, which for a personal fork means once
+  the lab instances have all been through one repaired startup.
+- **Redundancy check:** Upstream cannot carry this; the state it repairs only
+  exists because this fork renumbered its own migration — **keep** until the
+  deletion criterion above is met.
 
 ---
 

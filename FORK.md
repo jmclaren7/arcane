@@ -10,11 +10,12 @@ Arcane in a self-hosted lab from images the fork builds itself
 which upstream's release pipeline can't provide to a fork because it depends on
 GoReleaser Pro, Depot runners, and cosign secrets. Everything the fork carries
 falls into three buckets: **infrastructure adaptations** so CI, image builds,
-and the dev container work outside upstream's environment (changes #3, #4, #6);
-**documentation** describing the fork itself and filling gaps in the
+and the dev container work outside upstream's environment (changes #3, #4, #6,
+#13); **documentation** describing the fork itself and filling gaps in the
 contributor setup docs (#1, #5); and a small set of **behavioural fixes and
 UI refinements** that are genuinely upstreamable but haven't been submitted or
-merged yet (#2, #7–#11). The fork deliberately carries no product features of
+merged yet (#2, #7–#11, #14) — plus one piece of fork-only debt, the
+migration-renumbering startup repair (#12). The fork deliberately carries no product features of
 its own and no divergent architecture — every rebase resolves conflicts in
 favour of upstream unless the entry below marks the fork side as intentional,
 and any change upstream implements independently is dropped rather than
@@ -43,10 +44,53 @@ When you rebase, work through every entry below. For each one:
 4. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Superseded" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `60a8e663` — _chore: run deps install from
-> workflow_, on 2026-08-05. _(Previously `c9fa64b`, 2026-08-03.)_
+> **Last rebased onto upstream:** `5c3c7b70` — _refactor: use proper
+> tanstack-table v9 logic_, on 2026-08-08. _(Previously `60a8e663`,
+> 2026-08-05.)_
 >
-> This rebase carried 19 new upstream commits: a compose-interpolation
+> This rebase carried 27 new upstream commits: the 2.7.0 release, a large
+> UI-layout/view-consolidation refactor (`6422c76`, which reworked detail
+> pages around shared `resource-detail` components, replaced the project
+> containers table with a services panel, dropped the project Logs tab, and
+> moved the ports page under networks), a tanstack-table v9 logic refactor
+> (`5c3c7b7`), a passkey-identity fix series (`3b0fc6a` moving iOS-app
+> passkey logic to the backend, plus `1ef7cc5`, `bfc35fb`, `b84a386`,
+> `6b92201`), E2E spec stabilizations, and the usual dependency bumps and
+> Crowdin updates. One conflict needed manual work:
+>
+> 1. **Change #9 partially superseded.** Upstream's `6422c76` removed the
+>    commit-hash display from the project page's read-only git-managed alert
+>    (the alert now shows only the pre-deploy hook line and the env note)
+>    while keeping the header display. The fork's short-hash treatment of the
+>    alert site was dropped in favour of upstream's removal; the header and
+>    sync-table sites auto-merged cleanly and keep the short hash with the
+>    full hash in `title`. The entry below now lists only the two surviving
+>    display sites.
+>
+> **Change #14 was documented this round** — the startup-log noise fix
+> (`af9f77c`) had been committed to the fork on 2026-08-05 but never entered
+> in this file. It replayed with zero conflicts (upstream touched none of its
+> files this round) and is now recorded as Active change #14.
+>
+> Upstream added no new migrations (`071` still stands for change #11 and
+> change #12's constants are unchanged) and did not touch
+> `.github/workflows/ci.yml`, `.depot/workflows/ci.yml`, or any other file
+> carrying changes #2–#8, #10, #12, #13, so none needed re-derivation this
+> round. Upstream's E2E spec stabilizations (`6422c76`, `0b5eecf`) edited
+> `tests/spec/{project,images}.spec.ts` away from the lines change #13
+> touches, and merged clean.
+>
+> Verified post-rebase: `GOEXPERIMENT=jsonv2 go build ./...` and
+> `go vet ./...` clean over the whole backend; `go test ./pkg/projects/...
+> ./pkg/gitutil/... ./pkg/libarcane/edge/... ./pkg/fswatch/...
+> ./internal/database/...` and the GitOps service tests passing; and
+> `pnpm -C frontend check` reporting 0 errors / 0 warnings. Of the 27
+> commits, one (`6422c76`) partially superseded an active fork change (#9's
+> alert-site hunk); all 14 active changes remain necessary (redundancy checks
+> re-verified against `5c3c7b70`).
+>
+> Earlier rebase (`60a8e663`, 2026-08-05; previously `c9fa64b`, 2026-08-03):
+> carried 19 new upstream commits: a compose-interpolation
 > isolation fix (`b475a332`, which stops Arcane's own process environment
 > leaking into managed projects), an effective-`.env` rewrite that updates
 > overridden keys in place instead of appending duplicates (`d4480b41`),
@@ -390,9 +434,12 @@ When you rebase, work through every entry below. For each one:
   `frontend/src/routes/(app)/projects/[projectId]/+page.svelte`
 - **What:** Add a `shortenGitCommit` helper (and `SHORT_GIT_COMMIT_LENGTH = 7`)
   beside `toGitCommitUrl`. Everywhere a GitOps commit hash is shown — the sync
-  table `CommitCell`, the project header, and the read-only git-managed alert —
-  render the abbreviated hash with the full hash in a `title` tooltip. The commit
-  link's `href` still uses the full hash so it resolves.
+  table `CommitCell` and the project header — render the abbreviated hash with
+  the full hash in a `title` tooltip. The commit link's `href` still uses the
+  full hash so it resolves. _(A third display site, the project page's
+  read-only git-managed alert, was removed outright by upstream `6422c76` at
+  the 2026-08-08 rebase; the fork's short-hash hunk there was dropped with
+  it.)_
 - **Why:** Full 40-character hashes are noisy in the UI; the short form reads
   better while the full value stays available on hover and in the link.
 - **Re-apply notes:** The helper is appended to `navigation.ts` after
@@ -400,7 +447,9 @@ When you rebase, work through every entry below. For each one:
   renders `shortCommit`, and adds `title={fullCommit}` (the sync table) or
   `title={project.lastSyncCommit}` (the project page). Keep every commit-link
   `href` on the full hash. Shares `sync-table.svelte` with change #7 — apply
-  both when re-doing that file.
+  both when re-doing that file. Do **not** re-add the git-managed-alert site
+  upstream removed; apply the treatment only where upstream itself renders a
+  commit hash.
 - **Redundancy check:** Upstream renders the raw full hash with no short form or
   `title` — **keep**.
 
@@ -545,6 +594,59 @@ When you rebase, work through every entry below. For each one:
   same class of exposure, not yet hit, and left alone.
 - **Redundancy check:** Drop if upstream moves these pulls off `public.ecr.aws`
   itself.
+
+### 14. Quieter startup: stop logging non-problems
+
+- **Files:** `backend/pkg/projects/path_mapper.go`,
+  `backend/pkg/projects/path_mapper_test.go`,
+  `backend/pkg/projects/types/compose_content.go`,
+  `backend/pkg/fswatch/watcher.go`, `backend/pkg/fswatch/watcher_test.go`,
+  `backend/internal/services/api_key_service.go`,
+  `backend/internal/services/role_service.go`,
+  `backend/pkg/scheduler/scheduler.go`
+- **What:** Six startup/sync log lines described conditions that were not
+  happening; each is fixed at the source rather than by suppressing the log:
+  - `PathMapper` gains `IsPathMounted` (also added to the
+    `VolumeSourcePathMapper` interface in `compose_content.go`), because a
+    matching bind mount (`-v /opt/docker:/opt/docker`) resolves a project
+    directory to itself — indistinguishable, by comparing
+    `ContainerToHost`'s output to its input, from a directory outside every
+    mount. `hostWorkingDirInternal` now answers containment directly: a
+    matching mount short-circuits silently (nothing to remap), and only a
+    genuinely unmounted directory warns.
+  - The projects filesystem watcher
+    (`addExistingDirectoriesRecursiveInternal`) applies the same
+    scratch/snapshot exclusions as the discovery walker
+    (`IsInternalScratchDirName` / `IsFilesystemSnapshotDirName`), so Arcane's
+    own GitOps staging and backup writes no longer wake the sync loop.
+  - Unreadable directories (e.g. database data dirs owned by other users)
+    drop from WARN to DEBUG in the watcher and stop the descent; other watch
+    failures stay at WARN (that is what surfaces an exhausted inotify watch
+    limit).
+  - "Default admin user not found" (and "not a global admin") in
+    `getDefaultAdminUser` drop to DEBUG; the actionable case — a configured
+    static admin API key with no eligible account to attach to — gets its own
+    WARN in `ReconcileDefaultAdminAPIKey`.
+  - `upsertJobInternal` no longer logs "Job rescheduled" for a disabled job
+    that was never scheduled.
+  - `BackfillLegacyRoleAssignments` counts `RowsAffected` and only announces
+    a backfill at INFO when it actually inserted assignments; the every-boot
+    no-op drops to DEBUG.
+- **Why:** A healthy lab install's startup logs were full of warnings about
+  non-events, burying the messages that matter.
+- **Re-apply notes:** Anchors: `hostWorkingDirInternal` /
+  `isRemappableSourceInternal` in `path_mapper.go`,
+  `addExistingDirectoriesRecursiveInternal` in `watcher.go`,
+  `getDefaultAdminUser` / `ReconcileDefaultAdminAPIKey` in
+  `api_key_service.go`, `BackfillLegacyRoleAssignments` in `role_service.go`,
+  and the `switch` in `upsertJobInternal`. The watcher exclusion depends on
+  `projects.IsInternalScratchDirName` and
+  `projects.IsFilesystemSnapshotDirName` still being exported. All of it is
+  upstreamable; if submitting, note each piece stands alone.
+- **Redundancy check:** Upstream still warns on every unmounted-looking
+  project dir, still watches its own scratch directories, and still logs the
+  admin-user and backfill lines at WARN/INFO unconditionally — **keep**.
+  Drop any bullet upstream fixes independently.
 
 ---
 

@@ -14,7 +14,7 @@ and the dev container work outside upstream's environment (changes #3, #4, #6,
 #13); **documentation** describing the fork itself and filling gaps in the
 contributor setup docs (#1, #5); and a small set of **behavioural fixes and
 UI refinements** that are genuinely upstreamable but haven't been submitted or
-merged yet (#2, #7–#11, #14) — plus one piece of fork-only debt, the
+merged yet (#2, #7–#11, #14, #15) — plus one piece of fork-only debt, the
 migration-renumbering startup repair (#12). The fork deliberately carries no product features of
 its own and no divergent architecture — every rebase resolves conflicts in
 favour of upstream unless the entry below marks the fork side as intentional,
@@ -647,6 +647,47 @@ When you rebase, work through every entry below. For each one:
   project dir, still watches its own scratch directories, and still logs the
   admin-user and backfill lines at WARN/INFO unconditionally — **keep**.
   Drop any bullet upstream fixes independently.
+
+### 15. Deploy falls back to build when a build-capable service's image can't be pulled
+
+- **Files:** `backend/pkg/projects/pull_policy.go`,
+  `backend/pkg/projects/pull_policy_test.go`
+- **What:** `DecideDeployImageAction` now sets `FallbackBuildOnPullFail` for
+  **every pull-eligible policy** (`missing`/empty, `always`,
+  `daily`/`weekly`/`every_*`, and unknown values) when the service has a
+  `build` section, instead of only when the effective policy string was empty.
+  `never` (require local image) and `build` (build outright) are unchanged.
+- **Why:** For a compose service with both `image:` and `build:`, `docker
+  compose up` pulls and, if the pull fails, builds from source — the compose
+  spec documents this and the embedded `docker/compose` library implements it
+  for all pull-eligible policies (`pkg/compose/pull.go` swallows the pull error
+  for services with `build` and queues them for the build stage). Arcane's
+  deploy path had the matching fallback branch in
+  `ensureDeployServiceImageReady` (`project_service.go`), but it was
+  unreachable: `DeployProject` always resolves a non-empty deploy-level pull
+  policy (the `defaultDeployPullPolicy` setting, ultimately `"missing"`), and
+  `DecideDeployImageAction` substitutes that override when the service sets no
+  `pull_policy` of its own — so the `policy == ""` branch, the only one that
+  set the flag, never fired in a real deploy. Result: an unpullable image on a
+  build-capable service aborted the deploy with "failed to pull image" instead
+  of building, diverging from the docker compose convention.
+- **Re-apply notes:** The change is one `switch` — the `buildEnabled` branch of
+  `DecideDeployImageAction` — plus test cases in `TestDecideDeployImageAction`
+  (the deploy-override case `DecideDeployImageAction(svc, "missing")` is the
+  one that guards the actual bug). The flag's consumer is
+  `ensureDeployServiceImageReady` in
+  `backend/internal/services/project_service.go`, which falls back only when
+  `svc.Build != nil && decision.FallbackBuildOnPullFail` — confirm that
+  consumer still exists after a rebase; if upstream restructures the deploy
+  image preparation, re-apply the *intent*: any pull failure on a service with
+  a `build` section (policy not `never`/`build`) must fall back to building,
+  not abort the deploy. Upstreamable as a straight bug fix. Verify with
+  `go test ./pkg/projects/...`.
+- **Redundancy check:** Upstream's `DecideDeployImageAction` sets
+  `FallbackBuildOnPullFail` only on the unreachable `policy == ""` branch —
+  **keep**. Drop if upstream makes the fallback reachable itself (sets the
+  flag for the `missing`/`always` branches, or rewires deploy so pull failures
+  on build-capable services build instead of failing).
 
 ---
 

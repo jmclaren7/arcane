@@ -174,22 +174,20 @@ func DecideDeployImageAction(svc composetypes.ServiceConfig, pullPolicyOverride 
 	buildEnabled := svc.Build != nil
 
 	if buildEnabled {
+		// Compose falls back to building a service with a build section whenever
+		// a pull-eligible policy fails to pull; only never/build skip the pull.
 		switch {
 		case policy == "build":
 			return DeployImageDecision{Build: true}
 		case policy == "never":
 			return DeployImageDecision{RequireLocalOnly: true}
 		case IsAlwaysPullPolicy(policy):
-			return DeployImageDecision{PullAlways: true}
-		case policy == "missing":
-			return DeployImageDecision{PullIfMissing: true}
-		case policy == "":
-			return DeployImageDecision{PullIfMissing: true, FallbackBuildOnPullFail: true}
+			return DeployImageDecision{PullAlways: true, FallbackBuildOnPullFail: true}
 		default:
 			if window, ok := refreshWindowForPolicyInternal(svc, policy); ok {
-				return DeployImageDecision{PullIfStale: true, StaleAfter: window}
+				return DeployImageDecision{PullIfStale: true, StaleAfter: window, FallbackBuildOnPullFail: true}
 			}
-			return DeployImageDecision{PullIfMissing: true}
+			return DeployImageDecision{PullIfMissing: true, FallbackBuildOnPullFail: true}
 		}
 	}
 

@@ -233,27 +233,35 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 	return nil
 }
 
-// This fork briefly shipped its GitOps commit-injection migration as version 069
-// (fork commits f3b8e1e..130b45f, 2026-08-01..2026-08-03). Upstream then claimed
-// 069 (container_registries.repository_names) and 070 (passkeys/MFA), so the fork
-// migration was renumbered to 071. Goose keys its bookkeeping on the version number
-// alone, so a database migrated by a build from that window is wrong in two ways:
+// This fork's GitOps commit-injection migration has shipped under two version
+// numbers that upstream later claimed for its own migrations:
 //
-//  1. Version 69 is recorded, but it was the *fork's* migration that ran. Upstream's
-//     069 is therefore treated as applied and silently skipped, leaving
-//     container_registries.repository_names missing — every registry query then fails
-//     with "no such column".
-//  2. gitops_syncs.inject_commit_env already exists, so 071 aborts with
-//     "duplicate column name: inject_commit_env" and Arcane refuses to start.
+//   - Fork commits f3b8e1e..130b45f (2026-08-01..2026-08-03) shipped it as 069.
+//     Upstream then claimed 069 (container_registries.repository_names) and 070
+//     (passkeys/MFA), so the fork migration was renumbered to 071.
+//   - Fork builds between 130b45f and the 2026-08-15 rebase shipped it as 071.
+//     Upstream then claimed 071 (volume-workspace legacy key renames) and 072
+//     (project tags), so the fork migration was renumbered again, to 073.
 //
-// repairPreRenumberForkMigrationInternal detects that state and repairs both, in
-// place and without touching the operator's data. It runs outside Goose's Postgres
-// session lock, which is harmless: a second instance re-runs the same checks and
-// finds nothing to do, and the worst a genuine race can leave behind is a duplicate
-// version row, which Goose collapses when it reads its state. It can be deleted once
-// no pre-renumber database is left in the wild.
+// Goose keys its bookkeeping on the version number alone, so a database migrated
+// by a build from either window is wrong in two ways: the upstream migration that
+// now owns the recorded number is treated as applied and silently skipped, and
+// gitops_syncs.inject_commit_env already exists, so re-running the fork migration
+// under its new number aborts with "duplicate column name: inject_commit_env" and
+// Arcane refuses to start.
+//
+// repairPreRenumberForkMigrationInternal detects both states and repairs them in
+// place, without touching the operator's data: it applies everything below the
+// fork migration's current number through Goose, replays the upstream migration(s)
+// the stale bookkeeping made Goose skip, and records the fork migration as applied
+// instead of re-running its DDL. It runs outside Goose's Postgres session lock,
+// which is harmless: a second instance re-runs the same checks and finds nothing to
+// do, and the worst a genuine race can leave behind is a duplicate version row,
+// which Goose collapses when it reads its state. It can be deleted once no database
+// migrated by a pre-073 fork build is left in the wild.
 const (
-	forkCommitEnvMigrationVersion   int64 = 71
+	forkCommitEnvMigrationVersion   int64 = 73
+	forkCommitEnvMidRenumberVersion int64 = 71
 	forkCommitEnvPreRenumberVersion int64 = 69
 )
 
@@ -267,11 +275,21 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		return err
 	}
 
+	// Decide *before* the UpTo below whether version 71 is already recorded: on a
+	// 069-era database it is not, and the UpTo applies upstream's real 071 itself
+	// (recording it); on a 071-era database it is, which means Goose will skip
+	// upstream's 071 and its rename statements have to be replayed by hand.
+	midRenumberVersionRecorded, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvMidRenumberVersion)
+	if err != nil {
+		return err
+	}
+
 	slog.Warn("Detected a database migrated by a pre-renumber fork build; repairing migration state",
 		"provider", dbProvider, "currentVersion", currentVersion, "forkMigrationVersion", forkCommitEnvMigrationVersion)
 
 	// Everything below the fork migration has to be applied first: recording version
-	// 71 below raises the Goose version past 070, after which UpTo would skip it.
+	// 73 below raises the Goose version past the intermediate migrations, after
+	// which UpTo would skip them.
 	belowForkVersion := forkCommitEnvMigrationVersion - 1
 	if currentVersion < belowForkVersion {
 		if _, err := provider.UpTo(ctx, belowForkVersion); err != nil {
@@ -298,7 +316,18 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		}
 	}
 
-	// The column 071 adds is already present, so record it as applied rather than
+	// On a 071-era database the recorded 71 was the fork's migration, so upstream's
+	// 071 (volume-workspace legacy key renames) never ran. Its statements are
+	// idempotent by construction, so replaying them on a database where the renames
+	// already happened (a 069-era database repaired after Goose applied the real
+	// 071 above, but crashed before recording 73) is a no-op.
+	if midRenumberVersionRecorded {
+		if err := replaySkippedVolumeWorkspaceRenameInternal(ctx, tx, dbProvider); err != nil {
+			return err
+		}
+	}
+
+	// The column 073 adds is already present, so record it as applied rather than
 	// re-running its DDL, which would fail on the duplicate column.
 	if err := insertGooseMigrationVersionInternal(ctx, tx, dbProvider, forkCommitEnvMigrationVersion); err != nil {
 		return err
@@ -309,13 +338,14 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 	}
 
 	slog.Info("Repaired pre-renumber fork migration state",
-		"provider", dbProvider, "forkMigrationVersion", forkCommitEnvMigrationVersion, "restoredSkippedMigration", !repositoryNamesPresent)
+		"provider", dbProvider, "forkMigrationVersion", forkCommitEnvMigrationVersion,
+		"restoredSkippedMigration", !repositoryNamesPresent, "replayedVolumeWorkspaceRename", midRenumberVersionRecorded)
 	return nil
 }
 
 // hasPreRenumberForkMigrationStateInternal reports whether gitops_syncs.inject_commit_env
-// exists without version 71 being recorded — the signature of a fork build that applied
-// that migration under its old version number.
+// exists without version 73 being recorded — the signature of a fork build that applied
+// that migration under one of its old version numbers.
 func hasPreRenumberForkMigrationStateInternal(ctx context.Context, db *sql.DB, dbProvider string, currentVersion int64) (bool, error) {
 	if currentVersion < forkCommitEnvPreRenumberVersion {
 		return false, nil
@@ -350,6 +380,93 @@ func addSkippedRegistryRepositoryNamesColumnInternal(ctx context.Context, execer
 
 	if _, err := execer.ExecContext(ctx, query); err != nil {
 		return errors.WrapIff(err, "failed to restore skipped container_registries.repository_names column for %s", dbProvider)
+	}
+	return nil
+}
+
+// replaySkippedVolumeWorkspaceRenameInternal replays the Up statements of
+// 071_rename_volume_workspace_legacy_keys.sql, which Goose skipped because a
+// 071-era fork build had already recorded version 71 for its own migration. The
+// statements are copied from that migration and, like it, are idempotent: each
+// only touches rows still carrying a legacy name.
+func replaySkippedVolumeWorkspaceRenameInternal(ctx context.Context, execer sqlExecerInternal, dbProvider string) error {
+	var queries []string
+	switch dbProvider {
+	case dbProviderSQLite:
+		queries = []string{
+			`INSERT OR IGNORE INTO settings (key, value)
+SELECT 'volumeHelperIdleTimeout', value
+FROM settings
+WHERE key = 'volumeBrowserHelperIdleTimeout'`,
+			`DELETE FROM settings WHERE key = 'volumeBrowserHelperIdleTimeout'`,
+			`UPDATE roles
+SET permissions = (
+    SELECT json_group_array(permission)
+    FROM (
+        SELECT DISTINCT CASE value
+            WHEN 'volumes:browse' THEN 'volumes:read'
+            ELSE value
+        END AS permission
+        FROM json_each(roles.permissions)
+    )
+)
+WHERE EXISTS (
+    SELECT 1 FROM json_each(roles.permissions) WHERE value = 'volumes:browse'
+)`,
+			`DELETE FROM api_key_permissions AS legacy
+WHERE legacy.permission = 'volumes:browse'
+  AND EXISTS (
+      SELECT 1
+      FROM api_key_permissions AS current
+      WHERE current.api_key_id = legacy.api_key_id
+        AND current.permission = 'volumes:read'
+        AND COALESCE(current.environment_id, '') = COALESCE(legacy.environment_id, '')
+  )`,
+			`UPDATE api_key_permissions
+SET permission = 'volumes:read'
+WHERE permission = 'volumes:browse'`,
+		}
+	case dbProviderPostgres:
+		queries = []string{
+			`INSERT INTO settings (key, value)
+SELECT 'volumeHelperIdleTimeout', value
+FROM settings
+WHERE key = 'volumeBrowserHelperIdleTimeout'
+ON CONFLICT (key) DO NOTHING`,
+			`DELETE FROM settings WHERE key = 'volumeBrowserHelperIdleTimeout'`,
+			`UPDATE roles
+SET permissions = (
+    SELECT jsonb_agg(permission ORDER BY permission)
+    FROM (
+        SELECT DISTINCT CASE value
+            WHEN 'volumes:browse' THEN 'volumes:read'
+            ELSE value
+        END AS permission
+        FROM jsonb_array_elements_text(roles.permissions)
+    ) AS migrated_permissions
+)
+WHERE permissions ? 'volumes:browse'`,
+			`DELETE FROM api_key_permissions AS legacy
+WHERE legacy.permission = 'volumes:browse'
+  AND EXISTS (
+      SELECT 1
+      FROM api_key_permissions AS current
+      WHERE current.api_key_id = legacy.api_key_id
+        AND current.permission = 'volumes:read'
+        AND COALESCE(current.environment_id, '') = COALESCE(legacy.environment_id, '')
+  )`,
+			`UPDATE api_key_permissions
+SET permission = 'volumes:read'
+WHERE permission = 'volumes:browse'`,
+		}
+	default:
+		return errors.Errorf("unsupported database provider: %s", dbProvider)
+	}
+
+	for _, query := range queries {
+		if _, err := execer.ExecContext(ctx, query); err != nil {
+			return errors.WrapIff(err, "failed to replay skipped volume-workspace rename migration for %s", dbProvider)
+		}
 	}
 	return nil
 }

@@ -10,12 +10,12 @@ Arcane in a self-hosted lab from images the fork builds itself
 which upstream's release pipeline can't provide to a fork because it depends on
 GoReleaser Pro, Depot runners, and cosign secrets. Everything the fork carries
 falls into three buckets: **infrastructure adaptations** so CI, image builds,
-and the dev container work outside upstream's environment (changes #3, #4, #6,
-#13); **documentation** describing the fork itself and filling gaps in the
-contributor setup docs (#1, #5); and a small set of **behavioural fixes and
+and the dev container work outside upstream's environment (changes #2, #3, #5,
+#12); **documentation** describing the fork itself and filling gaps in the
+contributor setup docs (#1, #4); and a small set of **behavioural fixes and
 UI refinements** that are genuinely upstreamable but haven't been submitted or
-merged yet (#2, #7–#11, #14, #15) — plus one piece of fork-only debt, the
-migration-renumbering startup repair (#12). The fork deliberately carries no product features of
+merged yet (#6–#10, #13, #14) — plus one piece of fork-only debt, the
+migration-renumbering startup repair (#11). The fork deliberately carries no product features of
 its own and no divergent architecture — every rebase resolves conflicts in
 favour of upstream unless the entry below marks the fork side as intentional,
 and any change upstream implements independently is dropped rather than
@@ -44,11 +44,80 @@ When you rebase, work through every entry below. For each one:
 4. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Superseded" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `5c3c7b70` — _refactor: use proper
-> tanstack-table v9 logic_, on 2026-08-08. _(Previously `60a8e663`,
-> 2026-08-05.)_
+> **Last rebased onto upstream:** `b8bc5b4f` — _release: 2.8.0_, on
+> 2026-08-15. _(Previously `5c3c7b70`, 2026-08-08.)_
 >
-> This rebase carried 27 new upstream commits: the 2.7.0 release, a large
+> This rebase carried 73 new upstream commits: the 2.8.0 release, a
+> reorganization of `backend/internal/services` into per-domain packages
+> (`1cea5f48` — the single biggest structural change this fork has crossed),
+> a consolidation of backend file handling onto `go.getarcane.app/acfs`
+> (`bcdbe817`, `3d7e9ae2`), a frontend-toolchain migration to Vite+ / `vp`
+> with a root pnpm workspace (`4ca81d7c`, `9e2fe2f2`), the volume-workspace
+> feature (`6f6e2e2a`) and project tags (`9687b138`) — which claimed
+> migration numbers **071 and 072** — upstream's own white-flash fix
+> (`a6801855`), a performance sweep (config/materialization, GPU stats,
+> compose CLI reuse, API-key caching), and the usual dependency bumps and
+> Crowdin updates. The headline outcomes:
+>
+> 1. **Change #2 (early background to prevent white flash) superseded.**
+>    Upstream's `a6801855` injects an equivalent bootstrap script into
+>    `app.html` (reads `mode-watcher-mode`, toggles the `dark` class, sets
+>    `colorScheme` pre-hydration) plus appearance-attribute handling the fork
+>    never had. Resolved in favour of upstream; the fork commit was dropped
+>    outright and the entry moved to "Superseded / now upstream". **All
+>    following entries were renumbered down by one** (old #3–#15 are now
+>    #2–#14), matching the gap-closing convention from the `60a8e663` rebase.
+> 2. **The fork migration renumbered again, `071` → `073`,** because
+>    upstream's volume-workspace and project-tags work claimed 071/072. This
+>    re-created the exact collision change #11 exists for, one number later:
+>    a lab database migrated by a 071-era fork build has version 71 recorded
+>    for the *fork's* migration, so upstream's real 071 (volume-workspace
+>    legacy-key renames) would be silently skipped and 073 would abort on the
+>    duplicate `inject_commit_env` column. Change #11's repair was extended
+>    with a third constant (`forkCommitEnvMidRenumberVersion = 71`) and a
+>    replay of upstream 071's (idempotent) rename statements when it detects
+>    that state; both new shapes are covered by tests. Lab instances upgrade
+>    through one repaired startup with no hand-fix.
+> 3. **Changes #10, #11 and #13 relocated.** The services reorg moved
+>    `gitops_sync_service.go` → `internal/gitops/gitops_sync.go`,
+>    `api_key_service.go` → `internal/apikey/service.go` and
+>    `role_service.go` → `internal/role/service.go`; git followed the renames
+>    and replayed the fork hunks into the new files nearly clean (one
+>    signature conflict in `stageDirectorySyncInternal`, where upstream had
+>    renamed `getProjectsDirectoryInternal` → `GetProjectsDirectory`; one
+>    error-constant conflict in the apikey service, `ErrUserNotFound` →
+>    `common.ErrUserNotFound`). Change #14's consumer moved to
+>    `internal/project/project_lifecycle.go` with no re-work needed.
+> 4. **Change #5 (fork CI) re-derived onto upstream's Vite+ CI.** Upstream's
+>    `type-check` and E2E jobs now use `voidzero-dev/setup-vp` and `vp -C
+>    tests exec playwright`; the fork adaptation keeps its push/`main`
+>    triggers, `contents: read` permissions, `github.ref` concurrency
+>    fallback, `ubuntu-latest` runners, `docker/setup-buildx-action`, and the
+>    change-#12 mirror/retry prefetch, while adopting upstream's new steps
+>    (including the Playwright cache key moving to the root
+>    `pnpm-lock.yaml`). Change #4 (CONTRIBUTING) was merged around upstream's
+>    Vite+ rewrite of the same sections, keeping the fork's three-option
+>    Manual Commands structure with Vite+/Justfile as the host option.
+>
+> Change #8 replayed clean even though upstream rewrote the project detail
+> page around the new workspace UI — its header commit-hash site auto-merged
+> at the new location, and the short-hash treatment was confirmed in place.
+> Changes #2, #3, #6, #7, #9, #12 and #14 replayed with zero conflicts and
+> their redundancy checks were re-verified against `b8bc5b4f`.
+>
+> Verified post-rebase: `GOEXPERIMENT=jsonv2 go build ./...` and
+> `go vet ./...` clean over the whole backend; `go test
+> ./internal/database/... ./pkg/projects/... ./pkg/gitutil/...
+> ./pkg/fswatch/... ./pkg/libarcane/edge/... ./internal/gitops/...
+> ./internal/apikey/... ./internal/role/...` all passing (including the new
+> mid-renumber repair tests); and `pnpm -C frontend check` (root workspace
+> install) reporting 0 errors / 0 warnings. Of the 73 commits, one
+> (`a6801855`) superseded an active fork change; the remaining 14 active
+> changes are all still necessary.
+>
+> Earlier rebase (`5c3c7b70` — _refactor: use proper tanstack-table v9
+> logic_, 2026-08-08; previously `60a8e663`, 2026-08-05):
+> carried 27 new upstream commits: the 2.7.0 release, a large
 > UI-layout/view-consolidation refactor (`6422c76`, which reworked detail
 > pages around shared `resource-detail` components, replaced the project
 > containers table with a services panel, dropped the project Logs tab, and
@@ -253,24 +322,7 @@ When you rebase, work through every entry below. For each one:
   carried changes in sync with the Active list below (drop mentions of any
   change that moves to "Dropped").
 
-### 2. Set background early to prevent white flash
-
-- **Files:** `frontend/src/app.html`
-- **What:** Inject an inline `<style>` (light/dark `html` background +
-  `color-scheme`) and a small bootstrap `<script>` that reads the persisted
-  `mode-watcher-mode` (default `system`), toggles the `dark` class on `<html>`
-  and sets `colorScheme` before hydration.
-- **Why:** Eliminates the flash of incorrect theme on first paint.
-- **Re-apply notes:** Insert the block right after the two `theme-color`
-  `<meta>` tags, before `%sveltekit.head%`. The oklch values must match
-  upstream's `theme-color` metas (currently `oklch(1 0 0)` light /
-  `oklch(0.141 0.005 285.823)` dark). Depends on `mode-watcher` and its
-  `mode-watcher-mode` localStorage key — confirm both still exist
-  (`mode-watcher` in `frontend/package.json`).
-- **Redundancy check:** Upstream `app.html` still has no early-background
-  handling (only the two `theme-color` metas) — **keep**.
-
-### 3. Preinstall Bun in the dev Dockerfile
+### 2. Preinstall Bun in the dev Dockerfile
 
 - **Files:** `docker/Dockerfile.dev`
 - **What:** In the `frontend-dev` stage, `apt-get install ca-certificates curl
@@ -282,11 +334,13 @@ When you rebase, work through every entry below. For each one:
   `FROM ... AS frontend-dev` line. Keep the Node base image tag in sync with
   upstream (currently `node:26-trixie-slim`).
 - **Redundancy check:** `svelte-check-rs` is still the `check` script in
-  `frontend/package.json` and upstream's `frontend-dev` stage still omits Bun
-  (the `ca-certificates`/`curl` install lives in the separate `backend-dev`
-  stage, not the frontend one) — **keep**.
+  `frontend/package.json` (the Vite+ migration moved `dev`/`build`/`format`
+  to `vp` but left `check` on `svelte-check-rs`) and upstream's
+  `frontend-dev` stage still omits Bun (the `ca-certificates`/`curl` install
+  lives in the separate `backend-dev` stage, not the frontend one) —
+  **keep**.
 
-### 4. Exclude nested build artifacts from the Docker build context
+### 3. Exclude nested build artifacts from the Docker build context
 
 - **Files:** `.dockerignore`
 - **What:** Add recursive `**/node_modules`, `**/build`, `**/.svelte-kit`
@@ -298,7 +352,7 @@ When you rebase, work through every entry below. For each one:
   `node_modules`, `build`, and `.svelte-kit` are still top-level only —
   **keep**.
 
-### 5. Update contributor dev docs
+### 4. Update contributor dev docs
 
 - **Files:** `CONTRIBUTING.md`
 - **What:** Split Prerequisites into Required (Docker) and Optional (host
@@ -313,12 +367,18 @@ When you rebase, work through every entry below. For each one:
 - **Re-apply notes:** The patch anchors on the `### Prerequisites`,
   `### Justfile Shortcuts`, and `### Manual Commands` headings. Confirm the dev
   script path (`./scripts/development/dev.sh`) and the Compose project name
-  (`arcane-dev`) still match before re-applying.
-- **Redundancy check:** Upstream `CONTRIBUTING.md` Prerequisites still read
-  "Docker & Docker Compose (that's it! 🎉)" with no optional-tools guidance —
-  **keep**.
+  (`arcane-dev`) still match before re-applying. At the `b8bc5b4f` rebase
+  upstream rewrote the same sections around Vite+ (`vp` as required
+  prerequisite, `vp fmt`/`vp check` manual commands, a pre-commit-hooks
+  section); the fork's Required/Optional prerequisites split and three-option
+  Manual Commands structure were merged around it, with option 1 becoming
+  "Vite+ / Justfile on the host".
+- **Redundancy check:** Upstream `CONTRIBUTING.md` Prerequisites still list
+  only Docker / VS Code / Vite+ with no optional host-tools guidance for the
+  Justfile recipes, and its Manual Commands still omit the `-p arcane-dev`
+  Compose project name — **keep**.
 
-### 6. CI/workflows adapted for this fork
+### 5. CI/workflows adapted for this fork
 
 - **Files:** `.github/workflows/ci.yml`, `.github/workflows/build-next-images.yml`
 - **Intent:** Make CI run on a fork without upstream-only
@@ -345,16 +405,20 @@ When you rebase, work through every entry below. For each one:
   upstream `ci.yml` cleanly carries the fork's removals while inheriting
   upstream's pin bumps; `build-next-images.yml` is a wholesale fork rewrite, so
   re-derive it by hand and only sync upstream's action pins into it.) Keep
-  action/toolchain pins in sync with upstream. At the `73d13dc` rebase the fork
-  `ci.yml` adopted upstream's current pins (node 26, `actions/checkout@v7`,
-  `actions/setup-go@v7`, `golangci-lint-action@v9.3.0`, `actions/cache@v6.1.0`),
-  inherited upstream's new `Lint protobuf definitions` step and the renamed
-  `type-check` job (`pnpm install --frozen-lockfile` + `just lint js`), and kept
-  the fork's `push`/`main` triggers, `contents: read` permissions, the
-  `github.ref` concurrency fallback (needed for push events), `ubuntu-latest`
-  runners, and `docker/setup-buildx-action` in `e2e-tests`. At the `c9fa64b`
-  rebase the fork `ci.yml` inherited upstream's loosened pins
-  (`golangci-lint-action@v9`, `actions/cache@v6`) via clean replay.
+  action/toolchain pins in sync with upstream. At the `b8bc5b4f` rebase the
+  fork `ci.yml` was re-derived onto upstream's Vite+ CI: the `type-check` and
+  `e2e-tests` jobs now use `voidzero-dev/setup-vp@9446e853` (which replaces
+  the separate pnpm/Node setup and the explicit `pnpm install`) and run
+  Playwright via `vp -C tests exec`, and the Playwright browser cache key
+  follows the root `pnpm-lock.yaml` (the frontend lockfile moved to a root
+  pnpm workspace). The fork keeps its `push`/`main` triggers, `contents:
+  read` permissions, the `github.ref` concurrency fallback (needed for push
+  events), `ubuntu-latest` runners, `docker/setup-buildx-action` in
+  `e2e-tests`, and the change-#12 mirror/retry image prefetch. Earlier pin
+  history: at `73d13dc` the fork adopted node 26, `actions/checkout@v7`,
+  `actions/setup-go@v7`, `golangci-lint-action@v9.3.0`, `actions/cache@v6.1.0`
+  and upstream's `Lint protobuf definitions` step; at `c9fa64b` it inherited
+  the loosened `golangci-lint-action@v9` / `actions/cache@v6` pins.
   `build-next-images.yml` pins `actions/checkout@v7.0.0` and
   `docker/login-action@v4.5.2` (synced to upstream's `release.yml` bump).
   The fork intentionally keeps the agent image named `arcane-agent` (not
@@ -373,7 +437,7 @@ When you rebase, work through every entry below. For each one:
 - **Out of scope:** `build-pr-images.yml` and `release.yml` are left at
   upstream — the fork has never customised them.
 
-### 7. GitOps manual sync: honest feedback and per-row spinner
+### 6. GitOps manual sync: honest feedback and per-row spinner
 
 - **Files:** `frontend/src/routes/(app)/environments/[id]/gitops/sync-table.svelte`
 - **What:** "Sync Now" now reads `result.success` from the response body rather
@@ -392,15 +456,15 @@ When you rebase, work through every entry below. For each one:
   `DropdownMenu.Item`. The `onSuccess(data)` callback depends on
   `handleApiResultWithCallbacks` passing the parsed response body. Depends on
   message keys `common_syncing`, `git_sync_success`, `git_sync_failed`
-  (`frontend/messages/en.json`). Keep in step with change #8's backend
-  coalescing that returns `success=false` for an overlapping run. The spinner
+  (`frontend/messages/en.json`). Keep in step with the backend's sync
+  coalescing, which returns `success=false` for an overlapping run. The spinner
   belongs in the status column, **not** in the `DropdownMenu.Item` (the menu
   closes on select, so a spinner there is never seen).
 - **Redundancy check:** Upstream `sync-table.svelte` still toasts success on any
   2xx and uses the single `isLoading.syncing` flag with no status-column spinner
   — **keep**.
 
-### 8. Shallow, tag-less GitOps clones and ls-remote connection test
+### 7. Shallow, tag-less GitOps clones and ls-remote connection test
 
 - **Files:** `backend/pkg/gitutil/git.go`
 - **What:** `Client.Clone` sets `Depth: 1` and `Tags: git.NoTags`, so GitOps
@@ -425,9 +489,12 @@ When you rebase, work through every entry below. For each one:
   relies on commit history or tags being present in the clone would break — none
   currently do.
 - **Redundancy check:** Upstream `Clone` still does a full clone (no `Depth` /
-  `Tags`) and `TestConnection` still clones-and-deletes — **keep**.
+  `Tags`) and `TestConnection` still clones-and-deletes — **keep**. (The
+  `b8bc5b4f` acfs migration rewrote `BrowseTree`/`FileExists`/`ReadFile` in
+  the same file but left `Clone`, `TestConnection` and
+  `listRemoteReferences` untouched; the fork hunks replayed clean.)
 
-### 9. Short commit hash display with full hash on hover
+### 8. Short commit hash display with full hash on hover
 
 - **Files:** `frontend/src/lib/utils/navigation.ts`,
   `frontend/src/routes/(app)/environments/[id]/gitops/sync-table.svelte`,
@@ -446,14 +513,14 @@ When you rebase, work through every entry below. For each one:
   `toGitCommitUrl`. Each display site derives `{@const shortCommit = ...}`,
   renders `shortCommit`, and adds `title={fullCommit}` (the sync table) or
   `title={project.lastSyncCommit}` (the project page). Keep every commit-link
-  `href` on the full hash. Shares `sync-table.svelte` with change #7 — apply
+  `href` on the full hash. Shares `sync-table.svelte` with change #6 — apply
   both when re-doing that file. Do **not** re-add the git-managed-alert site
   upstream removed; apply the treatment only where upstream itself renders a
   commit hash.
 - **Redundancy check:** Upstream renders the raw full hash with no short form or
   `title` — **keep**.
 
-### 10. Hide the copy button when the Clipboard API is unavailable
+### 9. Hide the copy button when the Clipboard API is unavailable
 
 - **Files:** `frontend/src/lib/components/ui/copy-button/copy-button.svelte`
 - **What:** Replace the `isSecure` gate (which rendered a disabled button with an
@@ -481,14 +548,14 @@ When you rebase, work through every entry below. For each one:
   actions calling the secure-context-only `crypto.randomUUID`); it does not
   touch the copy button.
 
-### 11. GitOps commit-hash injection into the synced project's env
+### 10. GitOps commit-hash injection into the synced project's env
 
 - **Files:** `backend/pkg/projects/env.go`, `backend/pkg/projects/env_test.go`,
   `backend/internal/models/gitops_sync.go`,
-  `backend/internal/services/gitops_sync_service.go`,
-  `backend/internal/services/gitops_sync_service_test.go`,
-  `backend/internal/services/gitops_sync_service_unix_test.go`,
-  `backend/resources/migrations/{sqlite,postgres}/071_add_gitops_sync_inject_commit_env.sql`,
+  `backend/internal/gitops/gitops_sync.go`,
+  `backend/internal/gitops/service_test.go`,
+  `backend/internal/gitops/service_unix_test.go`,
+  `backend/resources/migrations/{sqlite,postgres}/073_add_gitops_sync_inject_commit_env.sql`,
   `types/gitops/gitops.go`, `frontend/src/lib/types/automation.ts`,
   `frontend/src/lib/components/dialogs/gitops-sync-dialog.svelte`,
   `frontend/messages/en.json`
@@ -513,12 +580,14 @@ When you rebase, work through every entry below. For each one:
   was built and deployed from.
 - **Re-apply notes:** The migration is Goose-versioned — on every rebase check
   whether upstream has claimed the fork migration's number and, if so, rename
-  it (both dialects) to the next free number (it moved `069` → `071` at the
-  `c9fa64b` rebase when upstream's passkey work took `069`/`070`; see the
-  deployment caveat in that rebase's notes above, now automated as change #12 —
-  renumbering again means updating its constants). Upstream added no migrations
-  at the `60a8e663` rebase, so `071` still stands and that caveat did not
-  recur. Injection has exactly two
+  it (both dialects) to the next free number **and update change #11's
+  constants and repair to cover the newly orphaned number**. History: `069` →
+  `071` at the `c9fa64b` rebase (upstream passkeys took `069`/`070`), then
+  `071` → `073` at the `b8bc5b4f` rebase (upstream volume-workspace/project
+  tags took `071`/`072`) — each renumbering left lab databases with the old
+  number recorded, which change #11 repairs at startup. The service code
+  lives in `backend/internal/gitops/gitops_sync.go` since upstream's
+  `1cea5f48` domain-package reorg. Injection has exactly two
   callsites, both feeding
   `gitMetadataEnvContentInternal`: `prepareSyncSource` (covers single-file and
   swarm, which both read `source.envContent`) and `stageDirectorySyncInternal`
@@ -533,49 +602,62 @@ When you rebase, work through every entry below. For each one:
 - **Redundancy check:** Upstream has no commit-injection option; its GitOps sync
   writes only the repository's own env content — **keep**.
 
-### 12. One-time repair for databases migrated by a pre-renumber fork build
+### 11. One-time repair for databases migrated by a pre-renumber fork build
 
 - **Files:** `backend/internal/database/database.go`,
   `backend/internal/database/database_test.go`
 - **What:** Before running Goose upwards, detect a database that applied change
-  #11's migration under its *old* number (`069`, shipped by fork builds between
-  `f3b8e1e` and `130b45f`) and repair it in place:
+  #10's migration under one of its *old* numbers and repair it in place.
   `repairPreRenumberForkMigrationInternal` fires when
-  `gitops_syncs.inject_commit_env` exists while version `71` is unrecorded, adds
-  the `container_registries.repository_names` column that upstream's `069` never
-  got to add, and records `71` as applied instead of re-running its DDL. It
-  applies everything below `71` through Goose first, so a database still sitting
-  at `69` does not skip `070` when the bookkeeping row lands.
-- **Why:** Goose keys its bookkeeping on the version number alone, so a database
-  carrying the fork's old `069` is broken in two ways on any later build: `071`
-  aborts with `duplicate column name: inject_commit_env` and Arcane refuses to
-  start, and upstream's `069` was silently treated as applied, leaving container
-  registry queries failing with `no such column: repository_names`. This is the
-  automated form of the hand-fix the `c9fa64b` rebase note described.
-- **Re-apply notes:** Purely fork debt from change #11's renumbering — nothing
+  `gitops_syncs.inject_commit_env` exists while version `73` is unrecorded. It
+  applies everything below `73` through Goose first, then repairs whichever
+  historical shape it finds:
+  - **069-era** (fork builds `f3b8e1e`..`130b45f`): version 69 was recorded
+    for the fork's migration, so upstream's `069` was skipped — the repair
+    adds the missing `container_registries.repository_names` column.
+  - **071-era** (fork builds `130b45f`..the 2026-08-15 rebase): version 71
+    was recorded for the fork's migration, so upstream's `071`
+    (volume-workspace legacy-key renames) was skipped — the repair replays
+    its rename statements, which are idempotent by construction.
+
+  Finally it records `73` as applied instead of re-running its DDL (the
+  column already exists).
+- **Why:** Goose keys its bookkeeping on the version number alone, so a
+  database carrying the fork migration under an old number is broken in two
+  ways on any later build: the fork migration's current number aborts with
+  `duplicate column name: inject_commit_env` and Arcane refuses to start, and
+  the upstream migration that now owns the recorded number is silently
+  treated as applied and skipped.
+- **Re-apply notes:** Purely fork debt from change #10's renumbering — nothing
   upstream will ever conflict with, though it sits in a file upstream does edit.
-  The two constants (`forkCommitEnvMigrationVersion`,
-  `forkCommitEnvPreRenumberVersion`) must be kept in step if a future rebase
-  renumbers change #11's migration again: the *pre-renumber* constant stays `69`
-  (that is the historical fact being repaired), only the current number moves.
-  `addSkippedRegistryRepositoryNamesColumnInternal` duplicates the single
-  statement of `069_add_container_registry_repository_names.sql`; the test
-  compares a repaired database's schema against a from-scratch migration, so
-  drift is caught rather than shipped. **Delete the whole thing** — repair,
-  constants, the two tests, and the README's closing sentence about it — once no
-  pre-renumber database is left running, which for a personal fork means once
-  the lab instances have all been through one repaired startup.
+  The constants (`forkCommitEnvMigrationVersion` = 73,
+  `forkCommitEnvMidRenumberVersion` = 71,
+  `forkCommitEnvPreRenumberVersion` = 69) must be kept in step if a future
+  rebase renumbers change #10's migration again: the historical numbers stay
+  fixed (they are the facts being repaired), only the current number moves —
+  and each new renumbering adds a new orphaned number whose upstream
+  migration needs its own replay.
+  `addSkippedRegistryRepositoryNamesColumnInternal` and
+  `replaySkippedVolumeWorkspaceRenameInternal` duplicate the statements of
+  the skipped upstream migrations; the tests compare a repaired database's
+  schema against a from-scratch migration (and assert the replayed renames'
+  data effects), so drift is caught rather than shipped. **Delete the whole
+  thing** — repair, constants, the tests, and the README's closing sentence
+  about it — once no pre-073 database is left running, which for a personal
+  fork means once the lab instances have all been through one repaired
+  startup.
 - **Redundancy check:** Upstream cannot carry this; the state it repairs only
   exists because this fork renumbered its own migration — **keep** until the
   deletion criterion above is met.
 
-### 13. E2E test images pulled from a mirror, with retries
+### 12. E2E test images pulled from a mirror, with retries
 
 - **Files:** `.github/workflows/ci.yml`, `.depot/workflows/ci.yml`,
   `tests/setup/project.data.ts`, `tests/spec/project.spec.ts`,
   `tests/spec/images.spec.ts`
-- **What:** The E2E test images come from `mirror.gcr.io` (Google's anonymous
-  Docker Hub pull-through cache) instead of `public.ecr.aws`, the prefetch step
+- **What:** The nginx E2E test image comes from `mirror.gcr.io` (Google's
+  anonymous Docker Hub pull-through cache) instead of `public.ecr.aws`, every
+  prefetch pull (including the `ghcr.io` radarr image, which stays on ghcr)
   retries a failed pull three times with linear backoff, and the dead
   `docker save … > /tmp/test-images.tar` was dropped — nothing has ever read
   that tarball; the pull alone is what seeds the runner's image store. The
@@ -587,7 +669,7 @@ When you rebase, work through every entry below. For each one:
   ran.
 - **Re-apply notes:** Upstream-agnostic and worth upstreaming; both workflow
   files carry the identical step so they do not drift. Verify `mirror.gcr.io`
-  still serves `library/nginx:stable-alpine` and `library/alpine:3.20`
+  still serves `library/nginx:stable-alpine`
   anonymously (manifest *and* blobs) before assuming a pull failure is
   transient. Note `tests/setup/compose*.yaml` still pulls `postgres:18-alpine`
   and `tecnativa/docker-socket-proxy:latest` straight from Docker Hub — the
@@ -595,14 +677,14 @@ When you rebase, work through every entry below. For each one:
 - **Redundancy check:** Drop if upstream moves these pulls off `public.ecr.aws`
   itself.
 
-### 14. Quieter startup: stop logging non-problems
+### 13. Quieter startup: stop logging non-problems
 
 - **Files:** `backend/pkg/projects/path_mapper.go`,
   `backend/pkg/projects/path_mapper_test.go`,
   `backend/pkg/projects/types/compose_content.go`,
   `backend/pkg/fswatch/watcher.go`, `backend/pkg/fswatch/watcher_test.go`,
-  `backend/internal/services/api_key_service.go`,
-  `backend/internal/services/role_service.go`,
+  `backend/internal/apikey/service.go`,
+  `backend/internal/role/service.go`,
   `backend/pkg/scheduler/scheduler.go`
 - **What:** Six startup/sync log lines described conditions that were not
   happening; each is fixed at the source rather than by suppressing the log:
@@ -638,7 +720,9 @@ When you rebase, work through every entry below. For each one:
   `isRemappableSourceInternal` in `path_mapper.go`,
   `addExistingDirectoriesRecursiveInternal` in `watcher.go`,
   `getDefaultAdminUser` / `ReconcileDefaultAdminAPIKey` in
-  `api_key_service.go`, `BackfillLegacyRoleAssignments` in `role_service.go`,
+  `internal/apikey/service.go`, `BackfillLegacyRoleAssignments` in
+  `internal/role/service.go` (both moved out of `internal/services/` by
+  upstream's `1cea5f48` domain-package reorg),
   and the `switch` in `upsertJobInternal`. The watcher exclusion depends on
   `projects.IsInternalScratchDirName` and
   `projects.IsFilesystemSnapshotDirName` still being exported. All of it is
@@ -648,7 +732,7 @@ When you rebase, work through every entry below. For each one:
   admin-user and backfill lines at WARN/INFO unconditionally — **keep**.
   Drop any bullet upstream fixes independently.
 
-### 15. Deploy falls back to build when a build-capable service's image can't be pulled
+### 14. Deploy falls back to build when a build-capable service's image can't be pulled
 
 - **Files:** `backend/pkg/projects/pull_policy.go`,
   `backend/pkg/projects/pull_policy_test.go`
@@ -676,7 +760,9 @@ When you rebase, work through every entry below. For each one:
   (the deploy-override case `DecideDeployImageAction(svc, "missing")` is the
   one that guards the actual bug). The flag's consumer is
   `ensureDeployServiceImageReady` in
-  `backend/internal/services/project_service.go`, which falls back only when
+  `backend/internal/project/project_lifecycle.go` (moved out of
+  `internal/services/project_service.go` by upstream's `1cea5f48` reorg),
+  which falls back only when
   `svc.Build != nil && decision.FallbackBuildOnPullFail` — confirm that
   consumer still exists after a rebase; if upstream restructures the deploy
   image preparation, re-apply the *intent*: any pull failure on a service with
@@ -697,6 +783,18 @@ Changes the fork used to carry that upstream has since implemented
 independently. Each entry names the upstream change that replaced it. Do
 **not** re-introduce them:
 
+- **Set background early to prevent white flash** *(was Active #2:
+  `frontend/src/app.html`)* — **superseded by upstream `a6801855`** _(fix:
+  prevent white flash on page load and refreshes)_, which injects its own
+  bootstrap `<script>` into `app.html` doing what the fork's did — read the
+  persisted `mode-watcher-mode` (default `system`), toggle the `dark` class
+  on `<html>`, set `style.colorScheme` before hydration — plus restoring
+  persisted appearance attributes/classes/CSS from `arcane-appearance`, which
+  the fork's version never handled, and pairing it with a `layout.css`
+  background rule. The fork's inline `<style>` block (explicit light/dark
+  `html` backgrounds) was not re-added: upstream's `color-scheme` +
+  `layout.css` approach covers the first paint. _Dropped at the 2026-08-15
+  rebase onto `b8bc5b4f`; the fork commit was skipped during the replay._
 - **Surface real rejection reason on tunnel register-send race** *(was Active
   #11: `backend/pkg/libarcane/edge/client.go`)* — **superseded by upstream
   `ccf4bd87`** _(chore(deps): bump google.golang.org/grpc from 1.82.1 to 1.83.0

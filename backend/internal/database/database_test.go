@@ -315,10 +315,11 @@ func TestMigration071_RenamesVolumeWorkspaceLegacyKeys(t *testing.T) {
 
 // TestMigrateDatabase_RepairsPreRenumberForkMigrationState reproduces the databases
 // produced by fork builds between f3b8e1e and 130b45f, which applied the GitOps
-// commit-injection migration as version 69 before it was renumbered to 071. Such a
-// database has inject_commit_env already (so 071 aborts with "duplicate column name")
-// and is missing container_registries.repository_names (because Goose treated
-// upstream's 069 as applied and skipped it).
+// commit-injection migration as version 69 before it was renumbered (ultimately to
+// 073). Such a database has inject_commit_env already (so re-running the fork
+// migration aborts with "duplicate column name") and is missing
+// container_registries.repository_names (because Goose treated upstream's 069 as
+// applied and skipped it).
 func TestMigrateDatabase_RepairsPreRenumberForkMigrationState(t *testing.T) {
 	testCases := []struct {
 		name           string
@@ -326,8 +327,8 @@ func TestMigrateDatabase_RepairsPreRenumberForkMigrationState(t *testing.T) {
 	}{
 		// The database never left the pre-renumber build.
 		{name: "left at the pre-renumber version", reachedVersion: forkCommitEnvPreRenumberVersion},
-		// The database was started once on a renumbered build: 070 applied, 071 failed.
-		{name: "already advanced past 070", reachedVersion: forkCommitEnvMigrationVersion - 1},
+		// The database was started once on a 073-era build: 070-072 applied, 073 failed.
+		{name: "already advanced past 072", reachedVersion: forkCommitEnvMigrationVersion - 1},
 	}
 
 	for _, testCase := range testCases {
@@ -370,9 +371,77 @@ func TestMigrateDatabase_RepairsPreRenumberForkMigrationState(t *testing.T) {
 	}
 }
 
+// TestMigrateDatabase_RepairsMidRenumberForkMigrationState reproduces the databases
+// produced by fork builds between 130b45f and the 2026-08-15 rebase, which applied the
+// GitOps commit-injection migration as version 71 — the number upstream later gave to
+// 071_rename_volume_workspace_legacy_keys.sql. Such a database has inject_commit_env
+// already (so 073 aborts with "duplicate column name") and never had the
+// volume-workspace legacy keys renamed (because Goose treats upstream's 071 as
+// applied and skips it).
+func TestMigrateDatabase_RepairsMidRenumberForkMigrationState(t *testing.T) {
+	ctx := context.Background()
+	rawDB, dsn := newSQLiteSQLDBInternal(t, t.TempDir(), "arcane-mid-renumber.db")
+	seedMidRenumberForkDatabaseInternal(t, ctx, rawDB)
+
+	// Seed the legacy volume-workspace names upstream's 071 renames, so the repair's
+	// replay has real work to do.
+	_, err := rawDB.ExecContext(ctx, `DELETE FROM settings WHERE key = 'volumeHelperIdleTimeout'`)
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES ('volumeBrowserHelperIdleTimeout', '27')`)
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, `INSERT INTO roles (id, name, permissions) VALUES ('role-workspace', 'Workspace role', '["volumes:browse","volumes:upload"]')`)
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, `INSERT INTO api_keys (id, name, key_hash, key_prefix) VALUES ('key-workspace', 'Workspace key', 'hash', 'arc_')`)
+	require.NoError(t, err)
+	_, err = rawDB.ExecContext(ctx, `INSERT INTO api_key_permissions (id, api_key_id, permission) VALUES ('grant-browse', 'key-workspace', 'volumes:browse')`)
+	require.NoError(t, err)
+
+	require.Equal(t, forkCommitEnvMidRenumberVersion, readGooseSQLiteVersionInternal(t, dsn))
+	require.NoError(t, migrateDatabaseInternal(ctx, rawDB, dbProviderSQLite, MigrationOptions{}))
+
+	highestVersion, err := getHighestEmbeddedMigrationVersionInternal(dbProviderSQLite)
+	require.NoError(t, err)
+	assert.Equal(t, highestVersion, readGooseSQLiteVersionInternal(t, dsn))
+
+	// Upstream's 071, which the stale bookkeeping made Goose skip, must have been
+	// replayed by the repair.
+	var timeout string
+	require.NoError(t, rawDB.QueryRow(`SELECT value FROM settings WHERE key = 'volumeHelperIdleTimeout'`).Scan(&timeout))
+	assert.Equal(t, "27", timeout)
+	var count int
+	require.NoError(t, rawDB.QueryRow(`SELECT COUNT(*) FROM settings WHERE key = 'volumeBrowserHelperIdleTimeout'`).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, rawDB.QueryRow(`SELECT COUNT(*) FROM json_each((SELECT permissions FROM roles WHERE id = 'role-workspace')) WHERE value = 'volumes:read'`).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, rawDB.QueryRow(`SELECT COUNT(*) FROM json_each((SELECT permissions FROM roles WHERE id = 'role-workspace')) WHERE value = 'volumes:browse'`).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, rawDB.QueryRow(`SELECT COUNT(*) FROM api_key_permissions WHERE api_key_id = 'key-workspace' AND permission = 'volumes:read'`).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, rawDB.QueryRow(`SELECT COUNT(*) FROM api_key_permissions WHERE permission = 'volumes:browse'`).Scan(&count))
+	assert.Zero(t, count)
+
+	// 072 must have been applied through Goose, and the repaired schema must match a
+	// from-scratch migration.
+	freshDB, _ := newSQLiteSQLDBInternal(t, t.TempDir(), "arcane-fresh-mid.db")
+	require.NoError(t, migrateDatabaseInternal(ctx, freshDB, dbProviderSQLite, MigrationOptions{}))
+	for _, table := range []string{"container_registries", "gitops_syncs", "project_tags", "settings"} {
+		assert.Equal(t, sqliteTableColumnsInternal(t, freshDB, table), sqliteTableColumnsInternal(t, rawDB, table),
+			"repaired schema for %s differs from a database migrated from scratch", table)
+	}
+
+	// The opt-in the operator had already set must survive the repair.
+	var injectCommitEnv bool
+	require.NoError(t, rawDB.QueryRow(`SELECT inject_commit_env FROM gitops_syncs WHERE id = 'sync-1'`).Scan(&injectCommitEnv))
+	assert.True(t, injectCommitEnv)
+
+	// Running again is a no-op rather than a second repair.
+	require.NoError(t, migrateDatabaseInternal(ctx, rawDB, dbProviderSQLite, MigrationOptions{}))
+	assert.Equal(t, highestVersion, readGooseSQLiteVersionInternal(t, dsn))
+}
+
 // TestMigrateDatabase_LeavesUnaffectedDatabaseAlone proves the repair never fires on a
-// database that reached version 70 without the pre-renumber fork build, which must
-// apply 071 through Goose as usual.
+// database that reached version 72 without ever running a pre-073 fork build, which
+// must apply 073 through Goose as usual.
 func TestMigrateDatabase_LeavesUnaffectedDatabaseAlone(t *testing.T) {
 	ctx := context.Background()
 	rawDB, dsn := newSQLiteSQLDBInternal(t, t.TempDir(), "arcane-unaffected.db")
@@ -397,18 +466,43 @@ func seedPreRenumberForkDatabaseInternal(t *testing.T, ctx context.Context, db *
 	t.Helper()
 
 	require.NoError(t, migrateDatabaseToVersionInternal(ctx, db, dbProviderSQLite, MigrationOptions{}, forkCommitEnvPreRenumberVersion-1))
+	applyForkCommitEnvMigrationInternal(t, ctx, db, forkCommitEnvPreRenumberVersion)
+	seedForkGitOpsSyncRowInternal(t, ctx, db)
+}
+
+// seedMidRenumberForkDatabaseInternal migrates to 070 and then replays what a
+// 071-era fork build did: it applied the commit-injection migration's Up section
+// and recorded it as version 71, the number upstream later gave to
+// 071_rename_volume_workspace_legacy_keys.sql.
+func seedMidRenumberForkDatabaseInternal(t *testing.T, ctx context.Context, db *stdsql.DB) {
+	t.Helper()
+
+	require.NoError(t, migrateDatabaseToVersionInternal(ctx, db, dbProviderSQLite, MigrationOptions{}, forkCommitEnvMidRenumberVersion-1))
+	applyForkCommitEnvMigrationInternal(t, ctx, db, forkCommitEnvMidRenumberVersion)
+	seedForkGitOpsSyncRowInternal(t, ctx, db)
+}
+
+// applyForkCommitEnvMigrationInternal applies the fork commit-injection migration's
+// Up section and records it under the version number the fork shipped it as at the
+// time being simulated.
+func applyForkCommitEnvMigrationInternal(t *testing.T, ctx context.Context, db *stdsql.DB, recordedVersion int64) {
+	t.Helper()
 
 	migrationsFS, err := embeddedMigrationFSInternal(dbProviderSQLite)
 	require.NoError(t, err)
-	content, err := fs.ReadFile(migrationsFS, "071_add_gitops_sync_inject_commit_env.sql")
+	content, err := fs.ReadFile(migrationsFS, "073_add_gitops_sync_inject_commit_env.sql")
 	require.NoError(t, err)
 	up, _ := gooseUpDownSectionsInternal(string(content))
 
 	_, err = db.ExecContext(ctx, up)
 	require.NoError(t, err)
-	require.NoError(t, insertGooseMigrationVersionInternal(ctx, db, dbProviderSQLite, forkCommitEnvPreRenumberVersion))
+	require.NoError(t, insertGooseMigrationVersionInternal(ctx, db, dbProviderSQLite, recordedVersion))
+}
 
-	_, err = db.ExecContext(ctx, `INSERT INTO environments (id, api_url, status, enabled) VALUES ('env-1', 'http://localhost', 'online', TRUE)`)
+func seedForkGitOpsSyncRowInternal(t *testing.T, ctx context.Context, db *stdsql.DB) {
+	t.Helper()
+
+	_, err := db.ExecContext(ctx, `INSERT INTO environments (id, api_url, status, enabled) VALUES ('env-1', 'http://localhost', 'online', TRUE)`)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `INSERT INTO git_repositories (id, name, url, auth_type) VALUES ('repo-1', 'lab', 'https://example.test/lab.git', 'none')`)
 	require.NoError(t, err)

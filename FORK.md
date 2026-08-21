@@ -14,7 +14,7 @@ and the dev container work outside upstream's environment (changes #2, #3, #5,
 #12); **documentation** describing the fork itself and filling gaps in the
 contributor setup docs (#1, #4); and a small set of **behavioural fixes and
 UI refinements** that are genuinely upstreamable but haven't been submitted or
-merged yet (#6–#10, #13, #14) — plus one piece of fork-only debt, the
+merged yet (#6–#10, #13–#15) — plus one piece of fork-only debt, the
 migration-renumbering startup repair (#11). The fork deliberately carries no product features of
 its own and no divergent architecture — every rebase resolves conflicts in
 favour of upstream unless the entry below marks the fork side as intentional,
@@ -774,6 +774,57 @@ When you rebase, work through every entry below. For each one:
   **keep**. Drop if upstream makes the fallback reachable itself (sets the
   flag for the `missing`/`always` branches, or rewires deploy so pull failures
   on build-capable services build instead of failing).
+
+### 15. Convert a Git-synced project back into a regular project
+
+- **Files:** `backend/internal/project/project.go`,
+  `backend/internal/project/project_sync.go`,
+  `backend/internal/project/handler.go`,
+  `backend/internal/project/service_test.go`,
+  `backend/pkg/libarcane/edge/commands.go`,
+  `frontend/src/lib/services/project-service.ts`,
+  `frontend/src/routes/(app)/projects/[projectId]/+page.svelte`,
+  `frontend/messages/en.json`
+- **What:** Two halves. (1) A new `POST
+  /environments/{id}/projects/{projectId}/gitops/detach` endpoint
+  (`ProjectService.DetachProjectFromGitOps`) clears the project's
+  `gitops_managed_by`, clears the owning sync's `project_id`, and turns the
+  sync's `auto_sync` off in one transaction — the project keeps its files and
+  containers but becomes editable again, and the sync configuration survives
+  for a later manual re-adopt. It is surfaced as a "Convert to regular project"
+  button next to "Sync from Git" in the compose tab's read-only banner, behind
+  a confirm dialog, and requires `projects:update` **and** `gitops:update`
+  (checked in the handler on top of the route's registered permission). (2)
+  `SyncProjectsFromFileSystem` now calls
+  `clearOrphanedGitOpsLinksInternal`, one UPDATE that releases any project
+  whose `gitops_managed_by` points at a sync row that no longer exists.
+- **Why:** `gitops_managed_by` is the only thing that marks a project as
+  Git-managed, and until upstream `775024e` (2026-08-12, first shipped in
+  2.8.0) deleting a sync did not clear it. A database that ever deleted a sync
+  on an older build is left with projects that are permanently read-only —
+  the compose file, the project name, and the workspace files are all locked,
+  `skipProjectCleanupInternal` exempts the row from filesystem cleanup, and no
+  UI path clears the flag because the sync it names is gone. Even on current
+  builds there was no way to stop a sync from managing a project without
+  deleting the sync (and, since `DeleteRepository` refuses while any sync
+  references it, unwinding the repository too).
+- **Re-apply notes:** The orphan reconcile must run **before**
+  `cleanupDBProjectsInternal`, since a stale link exempts the project from
+  cleanup. The detach lives in the project domain rather than gitops on
+  purpose: turning `auto_sync` off is enough to stop the scheduled job
+  (`registerSyncJobInternal`'s run body re-reads the row and returns early on
+  `!AutoSync`), so no scheduler handle is needed and no new DI wiring is
+  involved — if upstream changes that run body to stop re-reading, the detach
+  must also unregister `entityjobs.GitOpsSyncJobPrefix + syncID`. New project
+  routes need their `commandRoutes` entry in `backend/pkg/libarcane/edge/commands.go`
+  or edge-tunnel environments cannot reach them. Upstreamable as a feature plus
+  a recovery path for pre-2.8.0 databases. Verify with `go test
+  ./internal/project/ -run 'DetachProjectFromGitOps|ClearsOrphanedGitOpsLink'`
+  and `pnpm -C frontend check`.
+- **Redundancy check:** Upstream has no detach/convert action and no orphan
+  reconcile — **keep**. Drop the reconcile half if upstream adds its own
+  cleanup for links to deleted syncs (a migration or a startup repair); drop
+  the whole entry if upstream ships a way to unmanage a GitOps project.
 
 ---
 

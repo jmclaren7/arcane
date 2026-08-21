@@ -95,6 +95,7 @@ var commandRoutes = []commandRoute{
 	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/projects/{projectId}/build", CommandName: "project.build"},
 	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/projects/{projectId}/archive", CommandName: "project.archive"},
 	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/projects/{projectId}/unarchive", CommandName: "project.unarchive"},
+	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/projects/{projectId}/gitops/detach", CommandName: "project.gitops_detach"},
 
 	{Method: http.MethodGet, PathPattern: "/api/environments/{id}/gitops-syncs", CommandName: "gitops_sync.list"},
 	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/gitops-syncs", CommandName: "gitops_sync.create"},

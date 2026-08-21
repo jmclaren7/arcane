@@ -7214,3 +7214,149 @@ func TestProjectService_MapProjectToDto_SeedsHasBuildDirectiveFromPersistedRefs(
 		})
 	}
 }
+
+func TestProjectService_DetachProjectFromGitOps_ReleasesProjectAndSync(t *testing.T) {
+	db := setupProjectTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.AutoMigrate(&GitOpsSync{}))
+
+	settingsService, err := newSettingsServiceForTestInternal(t, ctx, db)
+	require.NoError(t, err)
+
+	projectsRoot := t.TempDir()
+	projectDir := filepath.Join(projectsRoot, "radarr")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "compose.yaml"), []byte("services:\n  app:\n    image: nginx\n"), 0o644))
+
+	projectID := "proj-detach"
+	syncID := "sync-detach"
+	require.NoError(t, db.Create(&GitOpsSync{
+		ID:            syncID,
+		Name:          "Radarr Sync",
+		EnvironmentID: "0",
+		RepositoryID:  "repo-1",
+		ComposePath:   "apps/radarr/compose.yaml",
+		ProjectName:   "Radarr",
+		ProjectID:     &projectID,
+		AutoSync:      true,
+		SyncInterval:  5,
+	}).Error)
+	require.NoError(t, db.Create(&Project{
+		ID:            projectID,
+		Name:            "Radarr",
+		DirName:         new("radarr"),
+		Path:            projectDir,
+		Status:          ProjectStatusStopped,
+		GitOpsManagedBy: &syncID,
+	}).Error)
+	require.NoError(t, settingsService.SetStringSetting(ctx, "projectsDirectory", projectsRoot))
+
+	svc := NewProjectService(db, settingsService, nil, nil, nil, nil, nil, nil, config.Load())
+	require.NoError(t, svc.DetachProjectFromGitOps(ctx, projectID, common.User{}))
+
+	detached, err := svc.GetProjectFromDatabaseByID(ctx, projectID)
+	require.NoError(t, err)
+	assert.Nil(t, detached.GitOpsManagedBy)
+
+	var sync GitOpsSync
+	require.NoError(t, db.Where("id = ?", syncID).First(&sync).Error)
+	assert.Nil(t, sync.ProjectID, "the sync must not keep managing the detached project")
+	assert.False(t, sync.AutoSync, "auto sync must be off so the sync cannot re-adopt the project")
+
+	// Detaching an already-regular project is a no-op, not an error.
+	require.NoError(t, svc.DetachProjectFromGitOps(ctx, projectID, common.User{}))
+}
+
+func TestProjectService_DetachProjectFromGitOps_ClearsLinkWhenSyncIsGone(t *testing.T) {
+	db := setupProjectTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.AutoMigrate(&GitOpsSync{}))
+
+	settingsService, err := newSettingsServiceForTestInternal(t, ctx, db)
+	require.NoError(t, err)
+
+	projectsRoot := t.TempDir()
+	projectDir := filepath.Join(projectsRoot, "sonarr")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "compose.yaml"), []byte("services:\n  app:\n    image: nginx\n"), 0o644))
+
+	projectID := "proj-detach-orphan"
+	missingSyncID := "sync-already-deleted"
+	require.NoError(t, db.Create(&Project{
+		ID:            projectID,
+		Name:            "Sonarr",
+		DirName:         new("sonarr"),
+		Path:            projectDir,
+		Status:          ProjectStatusStopped,
+		GitOpsManagedBy: &missingSyncID,
+	}).Error)
+	require.NoError(t, settingsService.SetStringSetting(ctx, "projectsDirectory", projectsRoot))
+
+	svc := NewProjectService(db, settingsService, nil, nil, nil, nil, nil, nil, config.Load())
+	require.NoError(t, svc.DetachProjectFromGitOps(ctx, projectID, common.User{}))
+
+	detached, err := svc.GetProjectFromDatabaseByID(ctx, projectID)
+	require.NoError(t, err)
+	assert.Nil(t, detached.GitOpsManagedBy)
+}
+
+func TestProjectService_SyncProjectsFromFileSystem_ClearsOrphanedGitOpsLink(t *testing.T) {
+	db := setupProjectTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.AutoMigrate(&GitOpsSync{}))
+
+	settingsService, err := newSettingsServiceForTestInternal(t, ctx, db)
+	require.NoError(t, err)
+
+	projectsRoot := t.TempDir()
+	orphanDir := filepath.Join(projectsRoot, "orphan")
+	managedDir := filepath.Join(projectsRoot, "managed")
+	for _, dir := range []string{orphanDir, managedDir} {
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  app:\n    image: nginx\n"), 0o644))
+	}
+
+	liveSyncID := "sync-live"
+	managedProjectID := "proj-managed"
+	require.NoError(t, db.Create(&GitOpsSync{
+		ID:            liveSyncID,
+		Name:          "Managed Sync",
+		EnvironmentID: "0",
+		RepositoryID:  "repo-1",
+		ComposePath:   "apps/managed/compose.yaml",
+		ProjectName:   "managed",
+		ProjectID:     &managedProjectID,
+	}).Error)
+
+	deletedSyncID := "sync-deleted"
+	orphanProjectID := "proj-orphan"
+	require.NoError(t, db.Create(&Project{
+		ID:            orphanProjectID,
+		Name:            "orphan",
+		DirName:         new("orphan"),
+		Path:            orphanDir,
+		Status:          ProjectStatusStopped,
+		GitOpsManagedBy: &deletedSyncID,
+	}).Error)
+	require.NoError(t, db.Create(&Project{
+		ID:            managedProjectID,
+		Name:            "managed",
+		DirName:         new("managed"),
+		Path:            managedDir,
+		Status:          ProjectStatusStopped,
+		GitOpsManagedBy: &liveSyncID,
+	}).Error)
+	require.NoError(t, settingsService.SetStringSetting(ctx, "projectsDirectory", projectsRoot))
+
+	svc := NewProjectService(db, settingsService, nil, nil, nil, nil, nil, nil, config.Load())
+	require.NoError(t, svc.SyncProjectsFromFileSystem(ctx))
+
+	orphan, err := svc.GetProjectFromDatabaseByID(ctx, orphanProjectID)
+	require.NoError(t, err)
+	assert.Nil(t, orphan.GitOpsManagedBy, "a link to a deleted sync must not keep the project read-only")
+
+	managed, err := svc.GetProjectFromDatabaseByID(ctx, managedProjectID)
+	require.NoError(t, err)
+	require.NotNil(t, managed.GitOpsManagedBy)
+	assert.Equal(t, liveSyncID, *managed.GitOpsManagedBy, "a live GitOps link must survive the reconcile")
+}

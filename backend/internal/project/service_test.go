@@ -7718,7 +7718,7 @@ func TestConfiguredProjectAggregatesReplicaAndPreviewChecks(t *testing.T) {
 	require.Equal(t, "3.2.0", scoped["two"].LatestVersion, "aggregation must not modify shared checks")
 }
 
-func TestProjectService_DetachProjectFromGitOps_ReleasesProjectAndSync(t *testing.T) {
+func TestProjectService_ReleaseGitOpsProjectLinks_ReleasesProjectAndSync(t *testing.T) {
 	db := setupProjectTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.AutoMigrate(&GitOpsSync{}))
@@ -7755,7 +7755,10 @@ func TestProjectService_DetachProjectFromGitOps_ReleasesProjectAndSync(t *testin
 	require.NoError(t, settingsService.SetStringSetting(ctx, "projectsDirectory", projectsRoot))
 
 	svc := NewProjectService(db, settingsService, nil, nil, nil, nil, nil, nil, config.Load())
-	require.NoError(t, svc.DetachProjectFromGitOps(ctx, projectID, common.User{}))
+	released, err := svc.ReleaseGitOpsProjectLinks(ctx, syncID, common.User{})
+	require.NoError(t, err)
+	require.Len(t, released, 1)
+	assert.Equal(t, projectID, released[0].ID)
 
 	detached, err := svc.GetProjectFromDatabaseByID(ctx, projectID)
 	require.NoError(t, err)
@@ -7764,13 +7767,15 @@ func TestProjectService_DetachProjectFromGitOps_ReleasesProjectAndSync(t *testin
 	var sync GitOpsSync
 	require.NoError(t, db.Where("id = ?", syncID).First(&sync).Error)
 	assert.Nil(t, sync.ProjectID, "the sync must not keep managing the detached project")
-	assert.False(t, sync.AutoSync, "auto sync must be off so the sync cannot re-adopt the project")
+	assert.False(t, sync.AutoSync, "auto sync must be off so a restart does not re-register the job")
 
-	// Detaching an already-regular project is a no-op, not an error.
-	require.NoError(t, svc.DetachProjectFromGitOps(ctx, projectID, common.User{}))
+	// Releasing an already-regular project is a no-op, not an error.
+	released, err = svc.ReleaseGitOpsProjectLinks(ctx, syncID, common.User{})
+	require.NoError(t, err)
+	assert.Empty(t, released)
 }
 
-func TestProjectService_DetachProjectFromGitOps_ClearsLinkWhenSyncIsGone(t *testing.T) {
+func TestProjectService_ReleaseGitOpsProjectLinks_ClearsLinkWhenSyncIsGone(t *testing.T) {
 	db := setupProjectTestDB(t)
 	ctx := context.Background()
 	require.NoError(t, db.AutoMigrate(&GitOpsSync{}))
@@ -7796,7 +7801,9 @@ func TestProjectService_DetachProjectFromGitOps_ClearsLinkWhenSyncIsGone(t *test
 	require.NoError(t, settingsService.SetStringSetting(ctx, "projectsDirectory", projectsRoot))
 
 	svc := NewProjectService(db, settingsService, nil, nil, nil, nil, nil, nil, config.Load())
-	require.NoError(t, svc.DetachProjectFromGitOps(ctx, projectID, common.User{}))
+	released, err := svc.ReleaseGitOpsProjectLinks(ctx, missingSyncID, common.User{})
+	require.NoError(t, err)
+	require.Len(t, released, 1)
 
 	detached, err := svc.GetProjectFromDatabaseByID(ctx, projectID)
 	require.NoError(t, err)

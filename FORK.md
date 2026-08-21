@@ -343,14 +343,34 @@ When you rebase, work through every entry below. For each one:
 ### 3. Exclude nested build artifacts from the Docker build context
 
 - **Files:** `.dockerignore`
-- **What:** Add recursive `**/node_modules`, `**/build`, `**/.svelte-kit`
-  alongside the existing top-level entries.
+- **What:** Add recursive `**/node_modules` and `**/.svelte-kit` alongside the
+  existing top-level entries, and list the JS workspaces' `build/` directories
+  explicitly (`build`, `frontend/build`, `tests/build`,
+  `email-templates/build`) instead of recursively.
 - **Why:** Nested workspace folders were copied into the build context and
   caused build failures (e.g. on Windows, where the bundled modules differed).
+- **Do not use `**/build` here.** It also matches the Go source package
+  `backend/internal/build`, which upstream added with the build/workspace
+  feature this fork picked up in the 2.8.0 rebase. That stripped the package
+  from the build context, so every image build — and therefore all three E2E
+  jobs — failed with `internal/image/handler.go:16:2: no required module
+  provides package .../internal/build`. The Go test and lint jobs stayed green
+  because they build outside Docker, which is what hid it. Docker's ignore
+  patterns are relative to the context root and are **not** recursive without
+  `**`, so a bare `build` already means "only the context root's build/"; note
+  that a leading slash (`/build`) is *not* the anchoring syntax Docker uses and
+  silently matches nothing. Verified against `github.com/moby/patternmatcher`,
+  the library Docker itself uses.
+- **Re-apply notes:** If a future rebase brings more JS workspaces, add their
+  `build/` paths here rather than reaching for a recursive pattern. Any
+  recursive `**/<name>` pattern risks shadowing a Go package of the same name;
+  `**/node_modules` and `**/.svelte-kit` are safe because no Go package can be
+  called either.
 - **Redundancy check:** Upstream added some recursive media/test patterns
   (`**/*.test.js`, `**/.DS_Store`, `**/*.mp4`), but the build-artifact entries
   `node_modules`, `build`, and `.svelte-kit` are still top-level only —
-  **keep**.
+  **keep**. The `**/build` correction is fork-only debt and disappears with the
+  entry.
 
 ### 4. Update contributor dev docs
 
@@ -777,50 +797,78 @@ When you rebase, work through every entry below. For each one:
 
 ### 15. Convert a Git-synced project back into a regular project
 
-- **Files:** `backend/internal/project/project.go`,
+- **Files:** `backend/internal/gitops/gitops_sync.go`,
+  `backend/internal/gitops/handler.go`,
+  `backend/internal/gitops/service_test.go`,
+  `backend/internal/project/project.go`,
   `backend/internal/project/project_sync.go`,
-  `backend/internal/project/handler.go`,
   `backend/internal/project/service_test.go`,
   `backend/pkg/libarcane/edge/commands.go`,
-  `frontend/src/lib/services/project-service.ts`,
+  `frontend/src/lib/services/gitops-sync-service.ts`,
   `frontend/src/routes/(app)/projects/[projectId]/+page.svelte`,
   `frontend/messages/en.json`
-- **What:** Two halves. (1) A new `POST
-  /environments/{id}/projects/{projectId}/gitops/detach` endpoint
-  (`ProjectService.DetachProjectFromGitOps`) clears the project's
-  `gitops_managed_by`, clears the owning sync's `project_id`, and turns the
-  sync's `auto_sync` off in one transaction — the project keeps its files and
-  containers but becomes editable again, and the sync configuration survives
-  for a later manual re-adopt. It is surfaced as a "Convert to regular project"
-  button next to "Sync from Git" in the compose tab's read-only banner, behind
-  a confirm dialog, and requires `projects:update` **and** `gitops:update`
-  (checked in the handler on top of the route's registered permission). (2)
-  `SyncProjectsFromFileSystem` now calls
-  `clearOrphanedGitOpsLinksInternal`, one UPDATE that releases any project
-  whose `gitops_managed_by` points at a sync row that no longer exists.
+- **What:** Two halves. (1) `POST
+  /environments/{id}/gitops-syncs/{syncId}/detach` →
+  `GitOpsSyncService.DetachManagedProjects`, which turns every project a sync
+  manages back into a regular project: it clears `projects.gitops_managed_by`,
+  clears the sync's `project_id`, switches `auto_sync` off and unregisters the
+  recurring job, while leaving the project's files and containers and the
+  sync's repository binding alone. The DB write is
+  `ProjectService.ReleaseGitOpsProjectLinks`, the deliberate mirror of
+  `EnsureGitOpsProjectLinked`, so the project domain keeps ownership of its own
+  compose cache and events. Surfaced as a confirmed "Convert to regular
+  project" button beside "Sync from Git" in the compose tab's read-only banner,
+  requiring `gitops:update` **and** `projects:update`. (2)
+  `SyncProjectsFromFileSystem` calls `clearOrphanedGitOpsLinksInternal`, one
+  UPDATE releasing any project whose `gitops_managed_by` names a sync row that
+  no longer exists.
 - **Why:** `gitops_managed_by` is the only thing that marks a project as
-  Git-managed, and until upstream `775024e` (2026-08-12, first shipped in
-  2.8.0) deleting a sync did not clear it. A database that ever deleted a sync
-  on an older build is left with projects that are permanently read-only —
-  the compose file, the project name, and the workspace files are all locked,
-  `skipProjectCleanupInternal` exempts the row from filesystem cleanup, and no
-  UI path clears the flag because the sync it names is gone. Even on current
-  builds there was no way to stop a sync from managing a project without
-  deleting the sync (and, since `DeleteRepository` refuses while any sync
-  references it, unwinding the repository too).
-- **Re-apply notes:** The orphan reconcile must run **before**
-  `cleanupDBProjectsInternal`, since a stale link exempts the project from
-  cleanup. The detach lives in the project domain rather than gitops on
-  purpose: turning `auto_sync` off is enough to stop the scheduled job
-  (`registerSyncJobInternal`'s run body re-reads the row and returns early on
-  `!AutoSync`), so no scheduler handle is needed and no new DI wiring is
-  involved — if upstream changes that run body to stop re-reading, the detach
-  must also unregister `entityjobs.GitOpsSyncJobPrefix + syncID`. New project
-  routes need their `commandRoutes` entry in `backend/pkg/libarcane/edge/commands.go`
-  or edge-tunnel environments cannot reach them. Upstreamable as a feature plus
-  a recovery path for pre-2.8.0 databases. Verify with `go test
-  ./internal/project/ -run 'DetachProjectFromGitOps|ClearsOrphanedGitOpsLink'`
-  and `pnpm -C frontend check`.
+  Git-managed, and nothing could clear it. Until upstream `775024e`
+  (2026-08-12, first shipped in 2.8.0) deleting a sync did not clear it, so any
+  database that deleted a sync on an older build carries projects that are
+  permanently read-only — compose file, project name and workspace files all
+  locked, `skipProjectCleanupInternal` exempting the row from filesystem
+  cleanup, and no UI path to clear the flag because the sync it names is gone.
+  Even on current builds, unmanaging a project meant deleting its sync and,
+  since `DeleteRepository` refuses while any sync references it, unwinding the
+  repository too.
+- **Re-apply notes:** Two invariants are the whole point of the design, and
+  both were found by review after a first attempt put the operation in the
+  project domain:
+  1. **Hold the sync's admission lease across the release.** `PerformSync`
+     takes `s.jobs.TryAcquire(ctx, syncID)` and *then* loads the sync row, so a
+     run already past admission holds the `ProjectID` it loaded. Without the
+     lease, a detach can commit underneath it and the run will mirror
+     repository files over the now-regular project and re-link it — either via
+     `EnsureGitOpsProjectLinked` (whose guard passes once
+     `gitops_managed_by` is nil) or via
+     `updateProjectFromDirectorySyncInternal`, which writes
+     `gitops_managed_by` unconditionally. Refusing with `common.ErrConflict`
+     (→ 409) while a run is in flight is what makes the two mutually
+     exclusive. This is why the operation lives in the GitOps domain: it is the
+     side that owns the lease, and `internal/gitops` already imports
+     `internal/project`, so the dependency cannot go the other way.
+  2. **Unregister the job explicitly.** `runScheduledSyncInternal` returns
+     early on `AutoSync=false` but does **not** unregister itself — only the
+     `ErrNotFound` path does. (The doc comment above
+     `registerSyncJobInternal` claims a row "toggled to AutoSync=false
+     self-cancels"; it does not, and that comment is upstream's.) Setting the
+     flag alone leaves a job firing and re-reading the row on every interval
+     until restart, so the detach removes it and relies on `auto_sync=false`
+     only for durability across restarts, since
+     `RegisterAutoSyncJobsOnStartup` registers auto-sync rows only.
+  A missing sync row needs no lease — nothing can run for it — and must still
+  release its projects; that tolerance is what unsticks pre-2.8.0 databases,
+  and it mirrors `DeleteSync`, which is likewise deletable when its row cannot
+  be loaded. New project or sync routes also need a `commandRoutes` entry in
+  `backend/pkg/libarcane/edge/commands.go` or edge-tunnel environments cannot
+  reach them. No migration: the orphan reconcile is idempotent code on the
+  project filesystem sync, which keeps this out of the fork's
+  migration-renumbering debt. Upstreamable as a feature plus a recovery path
+  for pre-2.8.0 databases. Verify with `go test ./internal/gitops/ -run
+  DetachManagedProjects`, `go test ./internal/project/ -run
+  'ReleaseGitOpsProjectLinks|ClearsOrphanedGitOpsLink'`, and `pnpm -C frontend
+  check`.
 - **Redundancy check:** Upstream has no detach/convert action and no orphan
   reconcile — **keep**. Drop the reconcile half if upstream adds its own
   cleanup for links to deleted syncs (a migration or a startup repair); drop

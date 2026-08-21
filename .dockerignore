@@ -5,8 +5,16 @@
 
 # Build artifacts
 **/node_modules
+# Listed per JS workspace on purpose. A recursive **/build also matched the Go
+# source package backend/internal/build and stripped it from the build context,
+# so the in-image go build failed with "no required module provides package
+# .../internal/build". Docker patterns are relative to the context root and are
+# not recursive without **, so these cover the workspaces that emit a build/
+# directory without shadowing Go source anywhere.
 build
-**/build
+frontend/build
+tests/build
+email-templates/build
 .svelte-kit
 **/.svelte-kit
 coverage

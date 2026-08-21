@@ -75,6 +75,15 @@ type DeleteGitOpsSyncOutput struct {
 	Body base.ApiResponse[base.MessageResponse]
 }
 
+type DetachGitOpsSyncProjectsInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	SyncID        string `path:"syncId" doc:"Sync ID"`
+}
+
+type DetachGitOpsSyncProjectsOutput struct {
+	Body base.ApiResponse[base.MessageResponse]
+}
+
 type PerformSyncInput struct {
 	EnvironmentID string `path:"id" doc:"Environment ID"`
 	SyncID        string `path:"syncId" doc:"Sync ID"`
@@ -129,6 +138,7 @@ func RegisterGitOpsSyncs(api huma.API, syncService *GitOpsSyncService) {
 	handlerutil.RegisterSecured(api, handlerutil.Operation("getGitOpsSync", "GET", syncPath, "Get a GitOps sync", "Get a GitOps sync by ID", "GitOps Syncs"), authz.PermGitOpsRead, h.GetSync)
 	handlerutil.RegisterSecured(api, handlerutil.Operation("updateGitOpsSync", "PUT", syncPath, "Update a GitOps sync", "Update an existing GitOps sync configuration", "GitOps Syncs"), authz.PermGitOpsUpdate, h.UpdateSync)
 	handlerutil.RegisterSecured(api, handlerutil.Operation("deleteGitOpsSync", "DELETE", syncPath, "Delete a GitOps sync", "Delete a GitOps sync configuration by ID", "GitOps Syncs"), authz.PermGitOpsDelete, h.DeleteSync)
+	handlerutil.RegisterSecured(api, handlerutil.Operation("detachGitOpsSyncProjects", "POST", syncPath+"/detach", "Detach managed projects", "Turn this sync's managed projects into regular, editable projects and switch auto sync off", "GitOps Syncs"), authz.PermGitOpsUpdate, h.DetachProjects)
 	handlerutil.RegisterSecured(api, handlerutil.Operation("performGitOpsSync", "POST", syncPath+"/sync", "Perform a GitOps sync", "Manually trigger a sync operation", "GitOps Syncs"), authz.PermGitOpsSync, h.PerformSync)
 	handlerutil.RegisterSecured(api, handlerutil.Operation("getGitOpsSyncStatus", "GET", syncPath+"/status", "Get GitOps sync status", "Get the current status of a GitOps sync", "GitOps Syncs"), authz.PermGitOpsRead, h.GetStatus)
 	handlerutil.RegisterSecured(api, handlerutil.Operation("browseGitOpsSyncFiles", "GET", syncPath+"/files", "Browse GitOps sync files", "Browse files in the synced repository", "GitOps Syncs"), authz.PermGitOpsRead, h.BrowseFiles)
@@ -279,6 +289,31 @@ func (h *GitOpsSyncHandler) DeleteSync(ctx context.Context, input *DeleteGitOpsS
 			Success: true,
 			Data: base.MessageResponse{
 				Message: "Sync deleted successfully",
+			},
+		},
+	}, nil
+}
+
+// DetachProjects releases this sync's managed projects so they become regular projects.
+func (h *GitOpsSyncHandler) DetachProjects(ctx context.Context, input *DetachGitOpsSyncProjectsInput) (*DetachGitOpsSyncProjectsOutput, error) {
+	actor := handlerutil.CurrentActor(ctx)
+
+	// Detaching unlocks the project for editing, so it needs project-update rights
+	// on top of the GitOps rights this route is registered with.
+	if ps, _ := middleware.PermissionsFromContext(ctx); !ps.Allows(authz.PermProjectsUpdate, input.EnvironmentID) {
+		return nil, huma.Error403Forbidden("detaching a project from GitOps requires the " + authz.PermProjectsUpdate + " permission")
+	}
+
+	if err := h.syncService.DetachManagedProjects(ctx, input.EnvironmentID, input.SyncID, actor); err != nil {
+		apiErr := common.ToAPIError(err)
+		return nil, huma.NewError(apiErr.HTTPStatus(), "Failed to detach projects from GitOps sync")
+	}
+
+	return &DetachGitOpsSyncProjectsOutput{
+		Body: base.ApiResponse[base.MessageResponse]{
+			Success: true,
+			Data: base.MessageResponse{
+				Message: "Project detached from GitOps successfully",
 			},
 		},
 	}, nil

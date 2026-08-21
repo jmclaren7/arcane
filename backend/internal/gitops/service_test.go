@@ -797,11 +797,11 @@ func TestGitOpsSyncService_SyncProjectDirectory_CommitOnlyChangeDoesNotRedeploy(
 	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env"), []byte(syncedEnvContent), 0o644))
 
 	project := &projectpkg.Project{
-		ID:        "proj-directory-commit-env",
-		Name:      "demo-project",
-		DirName:   new("demo-project"),
-		Path:      projectPath,
-		Status:    projectpkg.ProjectStatusStopped,
+		ID:      "proj-directory-commit-env",
+		Name:    "demo-project",
+		DirName: new("demo-project"),
+		Path:    projectPath,
+		Status:  projectpkg.ProjectStatusStopped,
 	}
 	require.NoError(t, db.Create(project).Error)
 
@@ -861,11 +861,11 @@ func TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsCh
 	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env"), []byte(repoEnvContent), 0o644))
 
 	project := &projectpkg.Project{
-		ID:            "proj-directory-enable-injection",
-		Name:      "demo-project",
-		DirName:   new("demo-project"),
-		Path:      projectPath,
-		Status:    projectpkg.ProjectStatusRunning,
+		ID:      "proj-directory-enable-injection",
+		Name:    "demo-project",
+		DirName: new("demo-project"),
+		Path:    projectPath,
+		Status:  projectpkg.ProjectStatusRunning,
 	}
 	require.NoError(t, db.Create(project).Error)
 
@@ -873,7 +873,7 @@ func TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsCh
 	require.NoError(t, err)
 
 	sync := &projectpkg.GitOpsSync{
-		ID:            "sync-directory-enable-injection",
+		ID:              "sync-directory-enable-injection",
 		Name:            "demo-sync",
 		EnvironmentID:   "0",
 		RepositoryID:    "repo-1",
@@ -2009,4 +2009,117 @@ func TestMarkSyncRedeployFailedInternal_PersistsErrorOnSyncRow(t *testing.T) {
 	require.NotNil(t, stored.SyncedFiles)
 	require.Contains(t, *stored.SyncedFiles, "compose.yml")
 	require.Contains(t, *stored.SyncedFiles, "scripts/pre-deploy.sh")
+}
+
+func TestGitOpsSyncService_DetachManagedProjectsRefusesWhileSyncRunsInternal(t *testing.T) {
+	ctx := context.Background()
+	svc, db, _ := setupGitOpsSyncDirectoryTestService(t)
+	gate := newGitOpsAdmissionGateForTestInternal(t)
+	scheduler := &gitOpsSyncTestSchedulerInternal{}
+	require.NoError(t, svc.SetScheduler(t.Context(), scheduler, gate))
+
+	syncID := "sync-detach-race"
+	projectID := "proj-detach-race"
+	require.NoError(t, db.Create(&projectpkg.GitOpsSync{
+		ID:            syncID,
+		Name:          "Racing Sync",
+		EnvironmentID: "0",
+		RepositoryID:  "repo-1",
+		ComposePath:   "apps/app/compose.yaml",
+		ProjectName:   "app",
+		ProjectID:     &projectID,
+		AutoSync:      true,
+		SyncInterval:  5,
+	}).Error)
+	require.NoError(t, db.Create(&projectpkg.Project{
+		ID:              projectID,
+		Name:            "app",
+		Path:            t.TempDir(),
+		Status:          projectpkg.ProjectStatusStopped,
+		GitOpsManagedBy: &syncID,
+	}).Error)
+
+	// Stand in for a run that already passed PerformSync's admission check and is
+	// holding the ProjectID it loaded.
+	lease, admitted, err := gate.TryAcquire(t.Context(), actors.AdmissionKey{Scope: gitOpsSyncAdmissionScopeInternal, ID: syncID})
+	require.NoError(t, err)
+	require.True(t, admitted)
+
+	err = svc.DetachManagedProjects(ctx, "0", syncID, common.User{})
+	require.ErrorIs(t, err, common.ErrConflict)
+
+	var project projectpkg.Project
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	require.NotNil(t, project.GitOpsManagedBy, "the binding must survive so the in-flight run stays consistent")
+	assert.Equal(t, syncID, *project.GitOpsManagedBy)
+	assert.Empty(t, scheduler.removed, "a refused detach must not unregister the job")
+
+	lease.Release()
+}
+
+func TestGitOpsSyncService_DetachManagedProjectsUnregistersJobInternal(t *testing.T) {
+	ctx := context.Background()
+	svc, db, _ := setupGitOpsSyncDirectoryTestService(t)
+	gate := newGitOpsAdmissionGateForTestInternal(t)
+	scheduler := &gitOpsSyncTestSchedulerInternal{}
+	require.NoError(t, svc.SetScheduler(t.Context(), scheduler, gate))
+
+	syncID := "sync-detach-job"
+	projectID := "proj-detach-job"
+	require.NoError(t, db.Create(&projectpkg.GitOpsSync{
+		ID:            syncID,
+		Name:          "Auto Sync",
+		EnvironmentID: "0",
+		RepositoryID:  "repo-1",
+		ComposePath:   "apps/app/compose.yaml",
+		ProjectName:   "app",
+		ProjectID:     &projectID,
+		AutoSync:      true,
+		SyncInterval:  5,
+	}).Error)
+	require.NoError(t, db.Create(&projectpkg.Project{
+		ID:              projectID,
+		Name:            "app",
+		Path:            t.TempDir(),
+		Status:          projectpkg.ProjectStatusStopped,
+		GitOpsManagedBy: &syncID,
+	}).Error)
+
+	require.NoError(t, svc.DetachManagedProjects(ctx, "0", syncID, common.User{}))
+
+	// runScheduledSyncInternal returns early on AutoSync=false but never
+	// unregisters, so the detach has to remove the job itself.
+	assert.Contains(t, scheduler.removed, entityjobs.GitOpsSyncJobPrefix+syncID)
+
+	var project projectpkg.Project
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	assert.Nil(t, project.GitOpsManagedBy)
+
+	var sync projectpkg.GitOpsSync
+	require.NoError(t, db.Where("id = ?", syncID).First(&sync).Error)
+	assert.False(t, sync.AutoSync)
+	assert.Nil(t, sync.ProjectID)
+}
+
+func TestGitOpsSyncService_DetachManagedProjectsReleasesStrandedProjectInternal(t *testing.T) {
+	ctx := context.Background()
+	svc, db, _ := setupGitOpsSyncDirectoryTestService(t)
+
+	deletedSyncID := "sync-deleted-by-old-build"
+	projectID := "proj-stranded"
+	require.NoError(t, db.Create(&projectpkg.Project{
+		ID:              projectID,
+		Name:            "stranded",
+		Path:            t.TempDir(),
+		Status:          projectpkg.ProjectStatusStopped,
+		GitOpsManagedBy: &deletedSyncID,
+	}).Error)
+
+	// No sync row and no scheduler wired: nothing can run for a sync that is gone,
+	// so the release must still go through.
+	require.NoError(t, svc.DetachManagedProjects(ctx, "0", deletedSyncID, common.User{}))
+
+	var project projectpkg.Project
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	assert.Nil(t, project.GitOpsManagedBy)
 }

@@ -117,35 +117,33 @@ func (s *ProjectService) EnsureGitOpsProjectLinked(ctx context.Context, sync *Gi
 	return nil
 }
 
-// DetachProjectFromGitOps turns a GitOps-managed project back into a regular
-// one: the files and containers stay, the compose editor becomes writable, and
-// the owning sync stops managing it. The sync row is kept with auto-sync off
-// rather than deleted, so its repository binding survives and a manual sync can
-// re-adopt the project later. A missing sync row is not an error — that is how a
-// project left behind by a sync deleted before deletes cleared the link gets
-// unstuck.
-func (s *ProjectService) DetachProjectFromGitOps(ctx context.Context, projectID string, user common.User) error {
-	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
-	if err != nil {
-		return err
+// ReleaseGitOpsProjectLinks is the inverse of EnsureGitOpsProjectLinked: every
+// project managed by syncID becomes a regular project again, and the sync stops
+// pointing at one with auto-sync switched off, so a restart does not re-register
+// its job. Files and containers are left untouched. A sync row that no longer
+// exists is still released, which is how projects stranded by a sync deleted
+// before deletes cleared the link become editable again.
+//
+// Callers must hold the sync's admission lease (see
+// GitOpsSyncService.DetachManagedProjects), otherwise a run already past
+// PerformSync's admission check can re-establish the binding it loaded before
+// the release.
+func (s *ProjectService) ReleaseGitOpsProjectLinks(ctx context.Context, syncID string, user common.User) ([]Project, error) {
+	syncID = strings.TrimSpace(syncID)
+	if syncID == "" {
+		return nil, errors.New("GitOps sync ID is required")
 	}
 
-	syncID := ""
-	if proj.GitOpsManagedBy != nil {
-		syncID = strings.TrimSpace(*proj.GitOpsManagedBy)
-	}
-	if syncID == "" {
-		return nil
+	var managed []Project
+	if err := s.db.WithContext(ctx).Where("gitops_managed_by = ?", syncID).Find(&managed).Error; err != nil {
+		return nil, errors.WrapIff(err, "failed to list projects managed by GitOps sync %s", syncID)
 	}
 
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&Project{}).Where("id = ?", projectID).
+		if err := tx.Model(&Project{}).Where("gitops_managed_by = ?", syncID).
 			Update("gitops_managed_by", nil).Error; err != nil {
-			return errors.WrapIff(err, "failed to clear the GitOps link on project %s", projectID)
+			return errors.WrapIff(err, "failed to clear the GitOps link for sync %s", syncID)
 		}
-		// Scheduled runs re-read the sync each fire and stop on AutoSync=false, so
-		// clearing the flag is enough to keep the sync from re-adopting the project;
-		// the registered job self-cancels on its next tick.
 		if err := tx.Model(&GitOpsSync{}).Where("id = ?", syncID).Updates(map[string]any{
 			"project_id": nil,
 			"auto_sync":  false,
@@ -154,17 +152,18 @@ func (s *ProjectService) DetachProjectFromGitOps(ctx context.Context, projectID 
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
-	// The compose file was resolved through the sync's compose path; drop the
-	// parsed entry so the next load rediscovers it from the directory.
-	s.parsedCompose.invalidate(projectID)
+	for i := range managed {
+		// The compose file was resolved through the sync's compose path; drop the
+		// parsed entry so the next load rediscovers it from the directory.
+		s.parsedCompose.invalidate(managed[i].ID)
+		metadata := database.JSON{"action": "gitops-detached", "projectID": managed[i].ID, "projectName": managed[i].Name, "syncID": syncID}
+		s.logProjectEventInternal(ctx, event.EventTypeProjectUpdate, managed[i].ID, managed[i].Name, user, metadata, "could not log project GitOps detach action")
+	}
 
-	metadata := database.JSON{"action": "gitops-detached", "projectID": projectID, "projectName": proj.Name, "syncID": syncID}
-	s.logProjectEventInternal(ctx, event.EventTypeProjectUpdate, projectID, proj.Name, user, metadata, "could not log project GitOps detach action")
-
-	return nil
+	return managed, nil
 }
 
 // ValidateComposeDirectory loads a staged compose tree with the same settings,

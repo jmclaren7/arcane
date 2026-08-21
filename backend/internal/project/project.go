@@ -117,6 +117,56 @@ func (s *ProjectService) EnsureGitOpsProjectLinked(ctx context.Context, sync *mo
 	return nil
 }
 
+// DetachProjectFromGitOps turns a GitOps-managed project back into a regular
+// one: the files and containers stay, the compose editor becomes writable, and
+// the owning sync stops managing it. The sync row is kept with auto-sync off
+// rather than deleted, so its repository binding survives and a manual sync can
+// re-adopt the project later. A missing sync row is not an error — that is how a
+// project left behind by a sync deleted before deletes cleared the link gets
+// unstuck.
+func (s *ProjectService) DetachProjectFromGitOps(ctx context.Context, projectID string, user models.User) error {
+	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	syncID := ""
+	if proj.GitOpsManagedBy != nil {
+		syncID = strings.TrimSpace(*proj.GitOpsManagedBy)
+	}
+	if syncID == "" {
+		return nil
+	}
+
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.Project{}).Where("id = ?", projectID).
+			Update("gitops_managed_by", nil).Error; err != nil {
+			return errors.WrapIff(err, "failed to clear the GitOps link on project %s", projectID)
+		}
+		// Scheduled runs re-read the sync each fire and stop on AutoSync=false, so
+		// clearing the flag is enough to keep the sync from re-adopting the project;
+		// the registered job self-cancels on its next tick.
+		if err := tx.Model(&models.GitOpsSync{}).Where("id = ?", syncID).Updates(map[string]any{
+			"project_id": nil,
+			"auto_sync":  false,
+		}).Error; err != nil {
+			return errors.WrapIff(err, "failed to release GitOps sync %s", syncID)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// The compose file was resolved through the sync's compose path; drop the
+	// parsed entry so the next load rediscovers it from the directory.
+	s.parsedCompose.invalidate(projectID)
+
+	metadata := models.JSON{"action": "gitops-detached", "projectID": projectID, "projectName": proj.Name, "syncID": syncID}
+	s.logProjectEventInternal(ctx, models.EventTypeProjectUpdate, projectID, proj.Name, user, metadata, "could not log project GitOps detach action")
+
+	return nil
+}
+
 // ValidateComposeDirectory loads a staged compose tree with the same settings,
 // Docker path mapping, and validation rules used by managed projects.
 func (s *ProjectService) ValidateComposeDirectory(ctx context.Context, projectName, projectPath, composeFileName string) (int, error) {

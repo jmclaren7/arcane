@@ -58,6 +58,11 @@ type DeleteGitOpsSyncInput struct {
 	SyncID        string `path:"syncId" doc:"Sync ID"`
 }
 
+type DetachGitOpsSyncProjectsInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	SyncID        string `path:"syncId" doc:"Sync ID"`
+}
+
 type PerformSyncInput struct {
 	EnvironmentID string `path:"id" doc:"Environment ID"`
 	SyncID        string `path:"syncId" doc:"Sync ID"`
@@ -285,6 +290,31 @@ func (h *GitOpsSyncHandler) DeleteSync(ctx context.Context, input *DeleteGitOpsS
 			Success: true,
 			Data: base.MessageResponse{
 				Message: "Sync deleted successfully",
+			},
+		},
+	}, nil
+}
+
+// DetachProjects releases this sync's managed projects so they become regular projects.
+func (h *GitOpsSyncHandler) DetachProjects(ctx context.Context, input *DetachGitOpsSyncProjectsInput) (*handlerutil.Out[base.MessageResponse], error) {
+	actor := handlerutil.CurrentActor(ctx)
+
+	// Detaching unlocks the project for editing, so it needs project-update rights
+	// on top of the GitOps rights this route is registered with.
+	if ps, _ := middleware.PermissionsFromContext(ctx); !ps.Allows(authz.PermProjectsUpdate, input.EnvironmentID) {
+		return nil, huma.Error403Forbidden("detaching a project from GitOps requires the " + authz.PermProjectsUpdate + " permission")
+	}
+
+	if err := h.syncService.DetachManagedProjects(ctx, input.EnvironmentID, input.SyncID, actor); err != nil {
+		apiErr := common.ToAPIError(err)
+		return nil, huma.NewError(apiErr.HTTPStatus(), "Failed to detach projects from GitOps sync")
+	}
+
+	return &handlerutil.Out[base.MessageResponse]{
+		Body: base.ApiResponse[base.MessageResponse]{
+			Success: true,
+			Data: base.MessageResponse{
+				Message: "Project detached from GitOps successfully",
 			},
 		},
 	}, nil

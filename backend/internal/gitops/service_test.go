@@ -898,20 +898,20 @@ func TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsCh
 	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env.git"), []byte(repoEnvContent), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env"), []byte(repoEnvContent), 0o644))
 
-	project := &models.Project{
-		BaseModel: models.BaseModel{ID: "proj-directory-enable-injection"},
+	project := &projectpkg.Project{
+		ID:            "proj-directory-enable-injection",
 		Name:      "demo-project",
 		DirName:   new("demo-project"),
 		Path:      projectPath,
-		Status:    models.ProjectStatusRunning,
+		Status:    projectpkg.ProjectStatusRunning,
 	}
 	require.NoError(t, db.Create(project).Error)
 
 	oldSyncedFilesJSON, err := json.Marshal([]string{"docker-compose.yaml"})
 	require.NoError(t, err)
 
-	sync := &models.GitOpsSync{
-		BaseModel:       models.BaseModel{ID: "sync-directory-enable-injection"},
+	sync := &projectpkg.GitOpsSync{
+		ID:            "sync-directory-enable-injection",
 		Name:            "demo-sync",
 		EnvironmentID:   "0",
 		RepositoryID:    "repo-1",
@@ -931,7 +931,7 @@ func TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsCh
 	}
 
 	const commitHash = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
-	updatedProject, _, created, changed, err := svc.syncProjectDirectoryInternal(ctx, sync, syncFiles, commitHash, models.User{})
+	updatedProject, _, created, changed, err := svc.syncProjectDirectoryInternal(ctx, sync, syncFiles, commitHash, common.User{})
 	require.NoError(t, err)
 	require.NotNil(t, updatedProject)
 	require.False(t, created)

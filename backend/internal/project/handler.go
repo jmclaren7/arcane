@@ -134,6 +134,15 @@ type UnarchiveProjectInput struct {
 	ProjectID     string `path:"projectId" doc:"Project ID"`
 }
 
+type DetachProjectGitOpsInput struct {
+	EnvironmentID string `path:"id" doc:"Environment ID"`
+	ProjectID     string `path:"projectId" doc:"Project ID"`
+}
+
+type DetachProjectGitOpsOutput struct {
+	Body base.ApiResponse[base.MessageResponse]
+}
+
 type PullProjectImagesInput struct {
 	EnvironmentID string `path:"id" doc:"Environment ID"`
 	ProjectID     string `path:"projectId" doc:"Project ID"`
@@ -955,6 +964,34 @@ func (h *ProjectHandler) UnarchiveProject(ctx context.Context, input *UnarchiveP
 		Body: base.ApiResponse[base.MessageResponse]{
 			Success: true,
 			Data:    base.MessageResponse{Message: "Project unarchived successfully"},
+		},
+	}, nil
+}
+
+func (h *ProjectHandler) DetachProjectGitOps(ctx context.Context, input *DetachProjectGitOpsInput) (*DetachProjectGitOpsOutput, error) {
+	if input.ProjectID == "" {
+		return nil, huma.Error400BadRequest("Project ID is required")
+	}
+
+	user, err := handlerutil.RequireUser(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Detaching turns off the owning sync's automation, so it needs GitOps update
+	// rights on top of the project-update rights this route is registered with.
+	if ps, _ := middleware.PermissionsFromContext(ctx); !ps.Allows(authz.PermGitOpsUpdate, input.EnvironmentID) {
+		return nil, huma.Error403Forbidden("detaching a project from GitOps requires the " + authz.PermGitOpsUpdate + " permission")
+	}
+
+	if err := h.projectService.DetachProjectFromGitOps(ctx, input.ProjectID, *user); err != nil {
+		return nil, huma.Error500InternalServerError(errors.WithMessage(err, "Failed to detach project from GitOps").Error())
+	}
+
+	return &DetachProjectGitOpsOutput{
+		Body: base.ApiResponse[base.MessageResponse]{
+			Success: true,
+			Data:    base.MessageResponse{Message: "Project detached from GitOps successfully"},
 		},
 	}, nil
 }

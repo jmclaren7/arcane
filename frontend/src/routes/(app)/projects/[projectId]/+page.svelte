@@ -44,7 +44,8 @@
 		ExternalLinkIcon,
 		SearchIcon,
 		ResetIcon,
-		GitBranchIcon
+		GitBranchIcon,
+		EditIcon
 	} from '#lib/icons/index.js';
 	import { RefreshIcon } from '#lib/icons/index.js';
 	import TabbedPageLayout from '#lib/layouts/tabbed-page-layout.svelte';
@@ -116,7 +117,8 @@
 		pulling: false,
 		saving: false,
 		syncing: false,
-		archiving: false
+		archiving: false,
+		detaching: false
 	});
 
 	const envId = $derived(environmentStore.selected?.id || '0');
@@ -289,6 +291,9 @@
 	);
 
 	let isGitOpsManaged = $derived(!!project?.gitOpsManagedBy);
+	// Detaching switches the owning sync's automation off, so it needs GitOps
+	// rights as well; the backend enforces the same pair.
+	let canDetachFromGit = $derived(canUpdateProject && hasPermission('gitops:update', envId));
 	let hasBuildDirective = $derived(!!project?.hasBuildDirective);
 
 	let canEditName = $derived(
@@ -1379,6 +1384,33 @@
 		});
 	}
 
+	function handleDetachFromGit() {
+		if (!project || !isGitOpsManaged) return;
+		openConfirmDialog({
+			title: m.git_managed_detach_title(),
+			message: m.git_managed_detach_message(),
+			confirm: {
+				label: m.git_managed_detach_action(),
+				action: async () => {
+					isLoading.detaching = true;
+					await handleApiResultWithCallbacks({
+						result: await tryCatch(projectService.detachProjectFromGitOps(projectId)),
+						message: m.git_managed_detach_failed(),
+						setLoadingState: (value) => (isLoading.detaching = value),
+						onSuccess: async () => {
+							toast.success(m.git_managed_detach_success());
+							await refreshProjectDetails({ forceRebaseDraft: true });
+							await Promise.all([
+								queryClient.invalidateQueries({ queryKey: ['projects', envId] }),
+								queryClient.invalidateQueries({ queryKey: queryKeys.gitOpsSyncs.all })
+							]);
+						}
+					});
+				}
+			}
+		});
+	}
+
 	async function handleCheckProjectUpdates() {
 		await checkProjectUpdatesMutation.mutateAsync();
 	}
@@ -1915,6 +1947,17 @@
 							icon={RefreshIcon}
 							customLabel={m.git_sync_from_git()}
 							loadingLabel={m.common_syncing()}
+						/>
+					{/if}
+					{#if canDetachFromGit}
+						<ArcaneButton
+							action="base"
+							tone="outline"
+							loading={isLoading.detaching}
+							onclick={handleDetachFromGit}
+							icon={EditIcon}
+							customLabel={m.git_managed_detach_action()}
+							loadingLabel={m.common_saving()}
 						/>
 					{/if}
 				</div>

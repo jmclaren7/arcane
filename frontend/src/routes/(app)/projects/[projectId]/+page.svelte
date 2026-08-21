@@ -1300,7 +1300,8 @@
 	}
 
 	function handleDetachFromGit() {
-		if (!project || !isGitOpsManaged) return;
+		const syncId = project?.gitOpsManagedBy;
+		if (!envId || !syncId) return;
 		openConfirmDialog({
 			title: m.git_managed_detach_title(),
 			message: m.git_managed_detach_message(),
@@ -1309,7 +1310,7 @@
 				action: async () => {
 					isLoading.detaching = true;
 					await handleApiResultWithCallbacks({
-						result: await tryCatch(projectService.detachProjectFromGitOps(projectId)),
+						result: await tryCatch(gitOpsSyncService.detachManagedProjects(envId, syncId)),
 						message: m.git_managed_detach_failed(),
 						setLoadingState: (value) => (isLoading.detaching = value),
 						onSuccess: async () => {

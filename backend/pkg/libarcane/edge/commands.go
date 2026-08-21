@@ -95,7 +95,6 @@ var commandRoutes = []commandRoute{
 	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/projects/{projectId}/build", CommandName: "project.build"},
 	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/projects/{projectId}/archive", CommandName: "project.archive"},
 	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/projects/{projectId}/unarchive", CommandName: "project.unarchive"},
-	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/projects/{projectId}/gitops/detach", CommandName: "project.gitops_detach"},
 
 	{Method: http.MethodGet, PathPattern: "/api/environments/{id}/gitops-syncs", CommandName: "gitops_sync.list"},
 	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/gitops-syncs", CommandName: "gitops_sync.create"},
@@ -103,6 +102,7 @@ var commandRoutes = []commandRoute{
 	{Method: http.MethodGet, PathPattern: "/api/environments/{id}/gitops-syncs/{syncId}", CommandName: "gitops_sync.inspect"},
 	{Method: http.MethodPut, PathPattern: "/api/environments/{id}/gitops-syncs/{syncId}", CommandName: "gitops_sync.update"},
 	{Method: http.MethodDelete, PathPattern: "/api/environments/{id}/gitops-syncs/{syncId}", CommandName: "gitops_sync.delete"},
+	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/gitops-syncs/{syncId}/detach", CommandName: "gitops_sync.detach"},
 	{Method: http.MethodPost, PathPattern: "/api/environments/{id}/gitops-syncs/{syncId}/sync", CommandName: "gitops_sync.run"},
 	{Method: http.MethodGet, PathPattern: "/api/environments/{id}/gitops-syncs/{syncId}/status", CommandName: "gitops_sync.status"},
 	{Method: http.MethodGet, PathPattern: "/api/environments/{id}/gitops-syncs/{syncId}/files", CommandName: "gitops_sync.files"},

@@ -239,6 +239,11 @@ class ProjectService extends BaseAPIService {
 		await this.handleResponse(this.api.post(`/environments/${envId}/projects/${projectId}/unarchive`));
 	}
 
+	async detachProjectFromGitOps(projectId: string): Promise<void> {
+		const envId = await environmentStore.getCurrentEnvironmentId();
+		await this.handleResponse(this.api.post(`/environments/${envId}/projects/${projectId}/gitops/detach`));
+	}
+
 	private async streamProjectPull(projectId: string, onLine?: (data: any) => void): Promise<void> {
 		const envId = await environmentStore.getCurrentEnvironmentId();
 		const url = `/api/environments/${envId}/projects/${projectId}/pull`;

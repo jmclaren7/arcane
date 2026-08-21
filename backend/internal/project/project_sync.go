@@ -175,10 +175,35 @@ func (s *ProjectService) SyncProjectsFromFileSystem(ctx context.Context) error {
 	}
 	renameSyncState.markProtectedPathsSeenInternal(seen)
 
+	// Before cleanup, because a stale GitOps link exempts a project from it.
+	if oerr := s.clearOrphanedGitOpsLinksInternal(ctx); oerr != nil {
+		slog.WarnContext(ctx, "error clearing orphaned GitOps project links", "error", oerr)
+	}
+
 	if cerr := s.cleanupDBProjectsInternal(ctx, seen, followProjectSymlinks, projectsDir, s.config.ProjectScanMaxDepth); cerr != nil {
 		slog.WarnContext(ctx, "error during DB cleanup of projects", "error", cerr)
 	}
 
+	return nil
+}
+
+// clearOrphanedGitOpsLinksInternal releases projects whose gitops_managed_by
+// points at a sync that no longer exists. Such a link is never recreated by a
+// sync run, yet it keeps the project read-only in the UI and exempt from
+// filesystem cleanup, so a project orphaned by a deleted sync would otherwise
+// stay stuck forever. A sync is always created before the project that
+// references it, so there is no window where a live link looks orphaned.
+func (s *ProjectService) clearOrphanedGitOpsLinksInternal(ctx context.Context) error {
+	result := s.db.WithContext(ctx).Model(&models.Project{}).
+		Where("gitops_managed_by IS NOT NULL AND gitops_managed_by <> ''").
+		Where("gitops_managed_by NOT IN (SELECT id FROM gitops_syncs)").
+		Update("gitops_managed_by", nil)
+	if result.Error != nil {
+		return errors.WrapIf(result.Error, "clear orphaned gitops project links failed")
+	}
+	if result.RowsAffected > 0 {
+		slog.InfoContext(ctx, "Released projects whose GitOps sync no longer exists; they are regular projects again", "count", result.RowsAffected)
+	}
 	return nil
 }
 

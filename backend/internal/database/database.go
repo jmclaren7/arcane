@@ -232,7 +232,7 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 	return nil
 }
 
-// This fork's GitOps commit-injection migration has shipped under two version
+// This fork's GitOps commit-injection migration has shipped under three version
 // numbers that upstream later claimed for its own migrations:
 //
 //   - Fork commits f3b8e1e..130b45f (2026-08-01..2026-08-03) shipped it as 069.
@@ -241,27 +241,31 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 //   - Fork builds between 130b45f and the 2026-08-15 rebase shipped it as 071.
 //     Upstream then claimed 071 (volume-workspace legacy key renames) and 072
 //     (project tags), so the fork migration was renumbered again, to 073.
+//   - Fork builds between the 2026-08-15 and 2026-08-22 rebases shipped it as
+//     073. Upstream then claimed 073 (S3/system backup support), so the fork
+//     migration was renumbered a third time, to 074.
 //
 // Goose keys its bookkeeping on the version number alone, so a database migrated
-// by a build from either window is wrong in two ways: the upstream migration that
-// now owns the recorded number is treated as applied and silently skipped, and
-// gitops_syncs.inject_commit_env already exists, so re-running the fork migration
-// under its new number aborts with "duplicate column name: inject_commit_env" and
-// Arcane refuses to start.
+// by a build from any of those windows is wrong in two ways: the upstream
+// migration that now owns the recorded number is treated as applied and silently
+// skipped, and gitops_syncs.inject_commit_env already exists, so re-running the
+// fork migration under its new number aborts with "duplicate column name:
+// inject_commit_env" and Arcane refuses to start.
 //
-// repairPreRenumberForkMigrationInternal detects both states and repairs them in
-// place, without touching the operator's data: it applies everything below the
+// repairPreRenumberForkMigrationInternal detects all three states and repairs them
+// in place, without touching the operator's data: it applies everything below the
 // fork migration's current number through Goose, replays the upstream migration(s)
 // the stale bookkeeping made Goose skip, and records the fork migration as applied
 // instead of re-running its DDL. It runs outside Goose's Postgres session lock,
 // which is harmless: a second instance re-runs the same checks and finds nothing to
 // do, and the worst a genuine race can leave behind is a duplicate version row,
 // which Goose collapses when it reads its state. It can be deleted once no database
-// migrated by a pre-073 fork build is left in the wild.
+// migrated by a pre-074 fork build is left in the wild.
 const (
-	forkCommitEnvMigrationVersion   int64 = 73
-	forkCommitEnvMidRenumberVersion int64 = 71
-	forkCommitEnvPreRenumberVersion int64 = 69
+	forkCommitEnvMigrationVersion    int64 = 74
+	forkCommitEnvLateRenumberVersion int64 = 73
+	forkCommitEnvMidRenumberVersion  int64 = 71
+	forkCommitEnvPreRenumberVersion  int64 = 69
 )
 
 func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbProvider string, provider *goose.Provider, currentVersion, requiredVersion int64) error {
@@ -274,11 +278,18 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		return err
 	}
 
-	// Decide *before* the UpTo below whether version 71 is already recorded: on a
-	// 069-era database it is not, and the UpTo applies upstream's real 071 itself
-	// (recording it); on a 071-era database it is, which means Goose will skip
-	// upstream's 071 and its rename statements have to be replayed by hand.
+	// Decide *before* the UpTo below whether versions 71 and 73 are already
+	// recorded: on a 069-era database neither is, and the UpTo applies upstream's
+	// real 071 and 073 itself (recording them); on a 071-era database 71 is
+	// recorded for the fork's migration, so Goose will skip upstream's 071 and its
+	// rename statements have to be replayed by hand; on a 073-era database 73 is
+	// recorded for the fork's migration, so Goose will skip upstream's 073 and its
+	// backup-support DDL has to be replayed by hand.
 	midRenumberVersionRecorded, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvMidRenumberVersion)
+	if err != nil {
+		return err
+	}
+	lateRenumberVersionRecorded, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvLateRenumberVersion)
 	if err != nil {
 		return err
 	}
@@ -299,6 +310,23 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 	repositoryNamesPresent, err := columnExistsInternal(ctx, db, dbProvider, "container_registries", "repository_names")
 	if err != nil {
 		return err
+	}
+
+	// Decide outside the transaction which volume_backups columns the backup-support
+	// replay still has to add: SQLite's ALTER TABLE has no IF NOT EXISTS, and on a
+	// database where a crashed earlier repair already let Goose apply the real 073,
+	// re-adding an existing column would abort the whole repair.
+	var missingBackupColumns []string
+	if lateRenumberVersionRecorded {
+		for _, column := range backupSupportVolumeBackupColumnsInternal {
+			present, err := columnExistsInternal(ctx, db, dbProvider, "volume_backups", column.name)
+			if err != nil {
+				return err
+			}
+			if !present {
+				missingBackupColumns = append(missingBackupColumns, column.name)
+			}
+		}
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -326,7 +354,17 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		}
 	}
 
-	// The column 073 adds is already present, so record it as applied rather than
+	// On a 073-era database the recorded 73 was the fork's migration, so upstream's
+	// 073 (S3/system backup support) never ran. Every statement is guarded (IF NOT
+	// EXISTS, plus the missing-column list above), so replaying on a database where
+	// the schema already exists is a no-op.
+	if lateRenumberVersionRecorded {
+		if err := replaySkippedBackupSupportInternal(ctx, tx, dbProvider, missingBackupColumns); err != nil {
+			return err
+		}
+	}
+
+	// The column 074 adds is already present, so record it as applied rather than
 	// re-running its DDL, which would fail on the duplicate column.
 	if err := insertGooseMigrationVersionInternal(ctx, tx, dbProvider, forkCommitEnvMigrationVersion); err != nil {
 		return err
@@ -338,12 +376,13 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 
 	slog.Info("Repaired pre-renumber fork migration state",
 		"provider", dbProvider, "forkMigrationVersion", forkCommitEnvMigrationVersion,
-		"restoredSkippedMigration", !repositoryNamesPresent, "replayedVolumeWorkspaceRename", midRenumberVersionRecorded)
+		"restoredSkippedMigration", !repositoryNamesPresent, "replayedVolumeWorkspaceRename", midRenumberVersionRecorded,
+		"replayedBackupSupport", lateRenumberVersionRecorded)
 	return nil
 }
 
 // hasPreRenumberForkMigrationStateInternal reports whether gitops_syncs.inject_commit_env
-// exists without version 73 being recorded — the signature of a fork build that applied
+// exists without version 74 being recorded — the signature of a fork build that applied
 // that migration under one of its old version numbers.
 func hasPreRenumberForkMigrationStateInternal(ctx context.Context, db *sql.DB, dbProvider string, currentVersion int64) (bool, error) {
 	if currentVersion < forkCommitEnvPreRenumberVersion {
@@ -465,6 +504,186 @@ WHERE permission = 'volumes:browse'`,
 	for _, query := range queries {
 		if _, err := execer.ExecContext(ctx, query); err != nil {
 			return errors.WrapIff(err, "failed to replay skipped volume-workspace rename migration for %s", dbProvider)
+		}
+	}
+	return nil
+}
+
+// backupSupportVolumeBackupColumnsInternal lists the columns
+// 073_add_backup_support.sql adds to volume_backups. The definitions are
+// identical in both dialects.
+var backupSupportVolumeBackupColumnsInternal = []struct {
+	name       string
+	definition string
+}{
+	{"status", `TEXT NOT NULL DEFAULT 'succeeded'`},
+	{"trigger", `TEXT NOT NULL DEFAULT 'manual'`},
+	{"s3_destination_id", `TEXT`},
+	{"error", `TEXT`},
+	{"destination", `TEXT NOT NULL DEFAULT 'local'`},
+	{"local_snapshot_id", `TEXT`},
+	{"remote_snapshot_id", `TEXT`},
+	{"policy_id", `TEXT`},
+	// Pre-existing rows are tar.gz archive backups; new Rustic-snapshot rows set 'rustic'.
+	{"format", `TEXT NOT NULL DEFAULT 'archive'`},
+}
+
+// replaySkippedBackupSupportInternal replays the Up statements of
+// 073_add_backup_support.sql, which Goose skipped because a 073-era fork build
+// had already recorded version 73 for its own migration. The statements are
+// copied from that migration with IF NOT EXISTS guards added (and the
+// volume_backups columns filtered to missingColumns, computed by the caller),
+// so replaying on a database that already carries part or all of the schema —
+// an earlier repair that crashed after Goose applied the real 073 — is a no-op.
+func replaySkippedBackupSupportInternal(ctx context.Context, execer sqlExecerInternal, dbProvider string, missingColumns []string) error {
+	var tables []string
+	switch dbProvider {
+	case dbProviderSQLite:
+		tables = []string{
+			`CREATE TABLE IF NOT EXISTS s3_destinations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    endpoint TEXT,
+    bucket TEXT NOT NULL,
+    region TEXT NOT NULL,
+    access_key_id TEXT NOT NULL,
+    secret_access_key TEXT NOT NULL,
+    prefix TEXT,
+    use_ssl INTEGER NOT NULL DEFAULT 1,
+    force_path_style INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME
+)`,
+			`CREATE TABLE IF NOT EXISTS volume_backup_policies (
+    id TEXT PRIMARY KEY,
+    volume_name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    schedule TEXT NOT NULL,
+    retention_count INTEGER NOT NULL DEFAULT 7,
+    stop_containers INTEGER NOT NULL DEFAULT 0,
+    local_enabled INTEGER NOT NULL DEFAULT 1,
+    s3_enabled INTEGER NOT NULL DEFAULT 0,
+    s3_destination_id TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME
+)`,
+			`CREATE TABLE IF NOT EXISTS system_backup_runs (
+    id TEXT PRIMARY KEY,
+    size INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME,
+    status TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    local_snapshot_id TEXT,
+    remote_snapshot_id TEXT,
+    s3_destination_id TEXT,
+    policy_id TEXT,
+    error TEXT
+)`,
+			`CREATE TABLE IF NOT EXISTS system_backup_policies (
+    id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    schedule TEXT NOT NULL,
+    retention_count INTEGER NOT NULL DEFAULT 7,
+    local_enabled INTEGER NOT NULL DEFAULT 1,
+    s3_enabled INTEGER NOT NULL DEFAULT 0,
+    s3_destination_id TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME
+)`,
+			`CREATE TABLE IF NOT EXISTS system_backup_recovery_config (
+    id TEXT PRIMARY KEY,
+    encrypted_recovery_key TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME
+)`,
+		}
+	case dbProviderPostgres:
+		tables = []string{
+			`CREATE TABLE IF NOT EXISTS s3_destinations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    endpoint TEXT,
+    bucket TEXT NOT NULL,
+    region TEXT NOT NULL,
+    access_key_id TEXT NOT NULL,
+    secret_access_key TEXT NOT NULL,
+    prefix TEXT,
+    use_ssl BOOLEAN NOT NULL DEFAULT TRUE,
+    force_path_style BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+)`,
+			`CREATE TABLE IF NOT EXISTS volume_backup_policies (
+    id TEXT PRIMARY KEY,
+    volume_name TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    schedule TEXT NOT NULL,
+    retention_count INTEGER NOT NULL DEFAULT 7,
+    stop_containers BOOLEAN NOT NULL DEFAULT FALSE,
+    local_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    s3_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    s3_destination_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+)`,
+			`CREATE TABLE IF NOT EXISTS system_backup_runs (
+    id TEXT PRIMARY KEY,
+    size BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    status TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    local_snapshot_id TEXT,
+    remote_snapshot_id TEXT,
+    s3_destination_id TEXT,
+    policy_id TEXT,
+    error TEXT
+)`,
+			`CREATE TABLE IF NOT EXISTS system_backup_policies (
+    id TEXT PRIMARY KEY,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    schedule TEXT NOT NULL,
+    retention_count INTEGER NOT NULL DEFAULT 7,
+    local_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    s3_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    s3_destination_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+)`,
+			`CREATE TABLE IF NOT EXISTS system_backup_recovery_config (
+    id TEXT PRIMARY KEY,
+    encrypted_recovery_key TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+)`,
+		}
+	default:
+		return errors.Errorf("unsupported database provider: %s", dbProvider)
+	}
+
+	queries := tables
+	for _, column := range backupSupportVolumeBackupColumnsInternal {
+		if !slices.Contains(missingColumns, column.name) {
+			continue
+		}
+		queries = append(queries, fmt.Sprintf(`ALTER TABLE volume_backups ADD COLUMN "%s" %s`, column.name, column.definition))
+	}
+	queries = append(queries,
+		`CREATE INDEX IF NOT EXISTS idx_volume_backups_s3_destination_id ON volume_backups(s3_destination_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_volume_backups_policy_id ON volume_backups(policy_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_volume_backup_policies_volume_name ON volume_backup_policies(volume_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_volume_backup_policies_s3_destination_id ON volume_backup_policies(s3_destination_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_system_backup_runs_s3_destination_id ON system_backup_runs(s3_destination_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_system_backup_runs_policy_id ON system_backup_runs(policy_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_system_backup_policies_s3_destination_id ON system_backup_policies(s3_destination_id)`,
+	)
+
+	for _, query := range queries {
+		if _, err := execer.ExecContext(ctx, query); err != nil {
+			return errors.WrapIff(err, "failed to replay skipped backup-support migration for %s", dbProvider)
 		}
 	}
 	return nil

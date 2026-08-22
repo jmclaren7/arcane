@@ -39,15 +39,99 @@ When you rebase, work through every entry below. For each one:
    upstream change elsewhere in a file the fork also edits (an import removed, a
    helper renamed) replays cleanly and breaks only at compile time. This has
    already happened once — see the `50c3d5d` note below. The minimum gate is
-   `GOEXPERIMENT=jsonv2 go build ./...` and `go vet ./...` in `backend/`, plus
+   `go build ./...` and `go vet ./...` in `backend/` (Go 1.27+; upstream
+   dropped the `GOEXPERIMENT=jsonv2` env at the go 1.27 upgrade), plus
    `pnpm install --frozen-lockfile && pnpm -C frontend check`.
 4. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Superseded" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `b8bc5b4f` — _release: 2.8.0_, on
-> 2026-08-15. _(Previously `5c3c7b70`, 2026-08-08.)_
+> **Last rebased onto upstream:** `c8ad3ed` — _chore(translations): update
+> translations via Crowdin (#3695)_, on 2026-08-22. _(Previously `b8bc5b4f`,
+> 2026-08-15.)_
 >
-> This rebase carried 73 new upstream commits: the 2.8.0 release, a
+> This rebase carried 48 new upstream commits: the 2.8.1 release, automated
+> S3/system backups (`555c5df`) — which claimed migration number **073** — a
+> dissolution of `backend/internal/models` into the domain packages
+> (`2bfc588`: `GitOpsSync`/`Project` now live in
+> `backend/internal/project/model.go`, `User` in `internal/common`, event
+> types in `internal/event`, `BaseModel`/`JSON` in `internal/database`), a Go
+> 1.27 upgrade (`b22edb6`, which drops the `GOEXPERIMENT=jsonv2` env
+> everywhere and adopts 1.27 idioms like `new(expr)`), a docker/compose
+> v5.5.0 bump (`e013a75`) that brought refresh-window pull policies
+> (`daily`/`weekly`/`every_N`) into `DecideDeployImageAction`, standalone
+> container editing, batched container-update notifications, git-synced
+> project files shown read-only in the workspace (`da21e26`), GitOps
+> permission-edge fixes (`d2d020d`), percent-decoded path parameters
+> (`c469305`), OIDC role-assignment fixes, and the usual dependency bumps and
+> Crowdin updates. The headline outcomes:
+>
+> 1. **The fork migration renumbered a third time, `073` → `074`,** because
+>    upstream's backup support claimed 073. This re-created the collision
+>    change #11 exists for, one number later: a lab database migrated by a
+>    073-era fork build has version 73 recorded for the *fork's* migration,
+>    so upstream's real 073 (the backup-support schema) would be silently
+>    skipped and 074 would abort on the duplicate `inject_commit_env` column.
+>    Change #11's repair was extended with a third constant
+>    (`forkCommitEnvLateRenumberVersion = 73`) and a replay of upstream 073's
+>    backup-support DDL, guarded with `IF NOT EXISTS` and a missing-column
+>    list so a crashed earlier repair can re-run it as a no-op; the new shape
+>    is covered by `TestMigrateDatabase_RepairsLateRenumberForkMigrationState`.
+> 2. **Changes #10 and #15 re-typed for the models dissolution.** `2bfc588`
+>    moved `models.GitOpsSync`/`models.Project` to the `internal/project`
+>    package (imported as `projectpkg` from `internal/gitops`), `models.User`
+>    → `common.User`, `models.JSON` → `database.JSON`, and the event
+>    constants → `internal/event`; Go 1.27 lets composite literals set the
+>    embedded `BaseModel`'s promoted `ID` directly, which upstream's own
+>    tests now rely on. The fork's signature changes in
+>    `syncProjectDirectoryInternal` / `stageDirectorySyncInternal` conflicted
+>    textually and were resolved by keeping upstream's types with the fork's
+>    added `commitHash` parameter; every other fork hunk was re-typed in
+>    place.
+> 3. **Change #14 re-derived onto the restructured
+>    `DecideDeployImageAction`.** compose v5.5.0 added refresh-window
+>    policies, so upstream rebuilt the `buildEnabled` switch around
+>    `PullIfStale`/`StaleAfter`. The fork now sets
+>    `FallbackBuildOnPullFail` on every pull-eligible branch **including the
+>    new refresh-window branch**, with a new test
+>    (`build service with refresh-window policy falls back to build`).
+>    Upstream's own fallback still fires only on the unreachable
+>    `policy == ""` branch, so the change remains necessary.
+> 4. **Change #12 extended to the new E2E images.** Upstream's S3-backup E2E
+>    prefetches `quay.io/minio/minio` and `ghcr.io/rustic-rs/rustic`; both
+>    were added to the fork's `pull_with_retry` prefetch (and mirrored into
+>    `.depot/workflows/ci.yml`, which upstream only gave the plain pulls in
+>    `.github`). nginx stays on `mirror.gcr.io`; the dead `docker save` stays
+>    dropped (still nothing reads the tarball).
+> 5. **Upstream moved adjacent to change #15 without superseding it.** New
+>    upstream code deletes syncs whose *environment* is gone
+>    (`CleanupOrphanedSyncsOnStartup`), clears `gitops_managed_by` on
+>    `DeleteSync` even when the row can't be loaded, and unregisters the
+>    recurring job when auto-sync is toggled off in `UpdateSync` (so
+>    re-apply note 2's claim that nothing unregisters on toggle-off is now
+>    stale for the update path — the detach still unregisters explicitly).
+>    None of it converts a managed project back to a regular one, and nothing
+>    repairs projects whose `gitops_managed_by` names an
+>    *already-deleted* sync, so both halves of #15 stay.
+>
+> Changes #1–#4, #6–#9 and #13 replayed with zero conflicts (change #4's Go
+> prerequisite was bumped to 1.27+ to match upstream's toolchain) and their
+> redundancy checks were re-verified against `c8ad3ed`.
+>
+> Verified post-rebase: `go build ./...` and `go vet ./...` clean over the
+> whole backend; `go test ./internal/database/... ./pkg/projects/...
+> ./pkg/gitutil/... ./pkg/fswatch/... ./pkg/libarcane/edge/...
+> ./internal/gitops/... ./internal/apikey/... ./internal/role/...
+> ./internal/project/...` passing (including the new late-renumber repair and
+> refresh-window fallback tests; the two known Docker-daemon-dependent
+> `internal/project` tests fail identically on pristine `upstream/main` in
+> the same container, so they are environmental, not fork regressions); and
+> `pnpm -C frontend check` reporting 0 errors / 0 warnings. Of the 48
+> commits, none superseded an active fork change; all 15 active changes
+> remain necessary.
+>
+> Earlier rebase (`b8bc5b4f` — _release: 2.8.0_, 2026-08-15; previously
+> `5c3c7b70`, 2026-08-08): carried 73 new upstream commits: the 2.8.0
+> release, a
 > reorganization of `backend/internal/services` into per-domain packages
 > (`1cea5f48` — the single biggest structural change this fork has crossed),
 > a consolidation of backend file handling onto `go.getarcane.app/acfs`
@@ -376,7 +460,7 @@ When you rebase, work through every entry below. For each one:
 
 - **Files:** `CONTRIBUTING.md`
 - **What:** Split Prerequisites into Required (Docker) and Optional (host
-  tools for the Justfile shortcuts: `just`, `pnpm`/Node, Go 1.26+,
+  tools for the Justfile shortcuts: `just`, `pnpm`/Node, Go 1.27+,
   `golangci-lint`, with a Windows `winget` one-liner); clarify that Justfile
   recipes run on the host, not in the dev containers; and expand "Manual
   Commands" into three options (Justfile, `dev.sh shell`, and one-shot
@@ -571,11 +655,12 @@ When you rebase, work through every entry below. For each one:
 ### 10. GitOps commit-hash injection into the synced project's env
 
 - **Files:** `backend/pkg/projects/env.go`, `backend/pkg/projects/env_test.go`,
-  `backend/internal/models/gitops_sync.go`,
+  `backend/internal/project/model.go` (the `GitOpsSync` model, moved there
+  from `internal/models/gitops_sync.go` by upstream `2bfc588`),
   `backend/internal/gitops/gitops_sync.go`,
   `backend/internal/gitops/service_test.go`,
   `backend/internal/gitops/service_unix_test.go`,
-  `backend/resources/migrations/{sqlite,postgres}/073_add_gitops_sync_inject_commit_env.sql`,
+  `backend/resources/migrations/{sqlite,postgres}/074_add_gitops_sync_inject_commit_env.sql`,
   `types/gitops/gitops.go`, `frontend/src/lib/types/automation.ts`,
   `frontend/src/lib/components/dialogs/gitops-sync-dialog.svelte`,
   `frontend/messages/en.json`
@@ -604,8 +689,9 @@ When you rebase, work through every entry below. For each one:
   constants and repair to cover the newly orphaned number**. History: `069` →
   `071` at the `c9fa64b` rebase (upstream passkeys took `069`/`070`), then
   `071` → `073` at the `b8bc5b4f` rebase (upstream volume-workspace/project
-  tags took `071`/`072`) — each renumbering left lab databases with the old
-  number recorded, which change #11 repairs at startup. The service code
+  tags took `071`/`072`), then `073` → `074` at the `c8ad3ed` rebase
+  (upstream backup support took `073`) — each renumbering left lab databases
+  with the old number recorded, which change #11 repairs at startup. The service code
   lives in `backend/internal/gitops/gitops_sync.go` since upstream's
   `1cea5f48` domain-package reorg. Injection has exactly two
   callsites, both feeding
@@ -629,8 +715,8 @@ When you rebase, work through every entry below. For each one:
 - **What:** Before running Goose upwards, detect a database that applied change
   #10's migration under one of its *old* numbers and repair it in place.
   `repairPreRenumberForkMigrationInternal` fires when
-  `gitops_syncs.inject_commit_env` exists while version `73` is unrecorded. It
-  applies everything below `73` through Goose first, then repairs whichever
+  `gitops_syncs.inject_commit_env` exists while version `74` is unrecorded. It
+  applies everything below `74` through Goose first, then repairs whichever
   historical shape it finds:
   - **069-era** (fork builds `f3b8e1e`..`130b45f`): version 69 was recorded
     for the fork's migration, so upstream's `069` was skipped — the repair
@@ -639,8 +725,14 @@ When you rebase, work through every entry below. For each one:
     was recorded for the fork's migration, so upstream's `071`
     (volume-workspace legacy-key renames) was skipped — the repair replays
     its rename statements, which are idempotent by construction.
+  - **073-era** (fork builds between the 2026-08-15 and 2026-08-22 rebases):
+    version 73 was recorded for the fork's migration, so upstream's `073`
+    (S3/system backup support) was skipped — the repair replays its DDL,
+    guarded with `IF NOT EXISTS` plus a pre-computed missing-column list
+    (SQLite's `ALTER TABLE` has no `IF NOT EXISTS`), so a crashed earlier
+    repair can re-run it as a no-op.
 
-  Finally it records `73` as applied instead of re-running its DDL (the
+  Finally it records `74` as applied instead of re-running its DDL (the
   column already exists).
 - **Why:** Goose keys its bookkeeping on the version number alone, so a
   database carrying the fork migration under an old number is broken in two
@@ -650,20 +742,23 @@ When you rebase, work through every entry below. For each one:
   treated as applied and skipped.
 - **Re-apply notes:** Purely fork debt from change #10's renumbering — nothing
   upstream will ever conflict with, though it sits in a file upstream does edit.
-  The constants (`forkCommitEnvMigrationVersion` = 73,
+  The constants (`forkCommitEnvMigrationVersion` = 74,
+  `forkCommitEnvLateRenumberVersion` = 73,
   `forkCommitEnvMidRenumberVersion` = 71,
   `forkCommitEnvPreRenumberVersion` = 69) must be kept in step if a future
   rebase renumbers change #10's migration again: the historical numbers stay
   fixed (they are the facts being repaired), only the current number moves —
   and each new renumbering adds a new orphaned number whose upstream
   migration needs its own replay.
-  `addSkippedRegistryRepositoryNamesColumnInternal` and
-  `replaySkippedVolumeWorkspaceRenameInternal` duplicate the statements of
+  `addSkippedRegistryRepositoryNamesColumnInternal`,
+  `replaySkippedVolumeWorkspaceRenameInternal` and
+  `replaySkippedBackupSupportInternal` duplicate the statements of
   the skipped upstream migrations; the tests compare a repaired database's
   schema against a from-scratch migration (and assert the replayed renames'
-  data effects), so drift is caught rather than shipped. **Delete the whole
+  and column defaults' data effects), so drift is caught rather than shipped.
+  **Delete the whole
   thing** — repair, constants, the tests, and the README's closing sentence
-  about it — once no pre-073 database is left running, which for a personal
+  about it — once no pre-074 database is left running, which for a personal
   fork means once the lab instances have all been through one repaired
   startup.
 - **Redundancy check:** Upstream cannot carry this; the state it repairs only
@@ -677,11 +772,16 @@ When you rebase, work through every entry below. For each one:
   `tests/spec/images.spec.ts`
 - **What:** The nginx E2E test image comes from `mirror.gcr.io` (Google's
   anonymous Docker Hub pull-through cache) instead of `public.ecr.aws`, every
-  prefetch pull (including the `ghcr.io` radarr image, which stays on ghcr)
+  prefetch pull (including the `ghcr.io` radarr image, which stays on ghcr,
+  and — since the `c8ad3ed` rebase — upstream's `quay.io/minio/minio` and
+  `ghcr.io/rustic-rs/rustic` images for the S3-backup E2E, kept on their
+  upstream registries and mirrored into the `.depot` workflow upstream left
+  bare)
   retries a failed pull three times with linear backoff, and the dead
   `docker save … > /tmp/test-images.tar` was dropped — nothing has ever read
   that tarball; the pull alone is what seeds the runner's image store. The
-  image name is referenced in three places besides the workflow, so all of them
+  nginx image name is referenced in three places besides the workflow, so all
+  of them
   move together or the prefetch stops matching what the fixtures ask for.
 - **Why:** `public.ecr.aws` rate-limits anonymous pulls per source IP, and the
   three E2E matrix jobs pull the same image simultaneously from one runner, so
@@ -850,9 +950,10 @@ When you rebase, work through every entry below. For each one:
      `internal/project`, so the dependency cannot go the other way.
   2. **Unregister the job explicitly.** `runScheduledSyncInternal` returns
      early on `AutoSync=false` but does **not** unregister itself — only the
-     `ErrNotFound` path does. (The doc comment above
-     `registerSyncJobInternal` claims a row "toggled to AutoSync=false
-     self-cancels"; it does not, and that comment is upstream's.) Setting the
+     missing-row path does. (Since the `c8ad3ed` rebase upstream's
+     `UpdateSync` does unregister when auto-sync is toggled off through the
+     API, but the detach writes `auto_sync=false` directly in SQL, so it
+     still has to remove the job itself.) Setting the
      flag alone leaves a job firing and re-reading the row on every interval
      until restart, so the detach removes it and relies on `auto_sync=false`
      only for durability across restarts, since
@@ -870,7 +971,13 @@ When you rebase, work through every entry below. For each one:
   'ReleaseGitOpsProjectLinks|ClearsOrphanedGitOpsLink'`, and `pnpm -C frontend
   check`.
 - **Redundancy check:** Upstream has no detach/convert action and no orphan
-  reconcile — **keep**. Drop the reconcile half if upstream adds its own
+  reconcile — **keep**. Upstream moved adjacent at the `c8ad3ed` rebase
+  without covering either half: `CleanupOrphanedSyncsOnStartup` releases and
+  deletes syncs whose *environment* is gone, and `DeleteSync` now clears
+  `gitops_managed_by` even when the sync row can't be loaded — but nothing
+  repairs a project whose `gitops_managed_by` names a sync that was *already
+  deleted* on an older build, and nothing converts a managed project back to
+  a regular one. Drop the reconcile half if upstream adds its own
   cleanup for links to deleted syncs (a migration or a startup repair); drop
   the whole entry if upstream ships a way to unmanage a GitOps project.
 

@@ -29,7 +29,7 @@ The `Justfile` recipes (`just lint`, `just test`, `just format`, etc.) run on yo
 
 - [`just`](https://github.com/casey/just) — recipe runner
 - [`pnpm`](https://pnpm.io/) (or Node 25+ with `corepack enable`) — frontend tooling
-- [Go](https://go.dev/dl/) 1.26+ — backend, CLI, and types modules
+- [Go](https://go.dev/dl/) 1.27+ — backend, CLI, and types modules
 - [`golangci-lint`](https://golangci-lint.run/) — Go linter used by `just lint backend|cli|types`
 
 On Windows (via [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/)):

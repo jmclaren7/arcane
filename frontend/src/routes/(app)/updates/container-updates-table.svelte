@@ -50,6 +50,8 @@
 		requestOptions: SearchPaginationSortRequest;
 		/** `autoUpdateExcludedContainers` setting — a CSV of ignored container names. */
 		excludedContainers?: string;
+		/** `autoUpdateIncludeMode` setting — the CSV lists included containers instead. */
+		autoUpdateIncludeMode?: boolean;
 		onRefreshData: (options: ContainerListRequestOptions) => Promise<ContainersPaginatedResponse>;
 		onIgnoreChanged?: () => Promise<unknown> | unknown;
 	}
@@ -58,6 +60,7 @@
 		containers = $bindable(),
 		requestOptions = $bindable(),
 		excludedContainers,
+		autoUpdateIncludeMode,
 		onRefreshData,
 		onIgnoreChanged
 	}: Props = $props();
@@ -78,7 +81,7 @@
 			currentValue: formatImageUpdateValue(container.updateInfo, 'current'),
 			latestValue: formatImageUpdateValue(container.updateInfo, 'latest'),
 			checkedAt: container.updateInfo?.checkTime ?? '',
-			ignored: isAutoUpdateIgnored(name, container.labels, excludedContainers),
+			ignored: isAutoUpdateIgnored(name, container.labels, excludedContainers, autoUpdateIncludeMode),
 			labelControlled: isAutoUpdateLabelDisabled(container.labels),
 			updateInfo: container.updateInfo,
 			container

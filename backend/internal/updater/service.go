@@ -1238,7 +1238,7 @@ func (s *UpdaterService) collectUsedImagesFromContainersInternal(ctx context.Con
 	return nil
 }
 
-func (s *UpdaterService) collectUsedImagesFromComposeContainersInternal(ctx context.Context, composeContainers []container.Summary, activeProjectNames map[string]struct{}, out map[string]struct{}) {
+func (s *UpdaterService) collectUsedImagesFromComposeContainersInternal(ctx context.Context, composeContainers []container.Summary, activeProjectNames map[string]struct{}, updateFilter containerUpdateFilterInternal, out map[string]struct{}) {
 	for _, summary := range composeContainers {
 		projectName := dockerutil.ComposeProjectLabel(summary.Labels)
 		if projectName == "" {
@@ -1248,6 +1248,10 @@ func (s *UpdaterService) collectUsedImagesFromComposeContainersInternal(ctx cont
 			continue
 		}
 		if labels.IsUpdateDisabled(summary.Labels) {
+			continue
+		}
+		if updateFilter.excludesInternal(summary.Names) {
+			s.loggerInternal().DebugContext(ctx, "collectUsedImagesFromComposeContainers: skipping excluded container", "containerId", summary.ID, "names", summary.Names)
 			continue
 		}
 
@@ -1348,7 +1352,7 @@ func (s *UpdaterService) collectUsedImagesFromProjectsInternal(ctx context.Conte
 		return err
 	}
 
-	s.collectUsedImagesFromComposeContainersInternal(ctx, composeContainers, activeProjectNames, out)
+	s.collectUsedImagesFromComposeContainersInternal(ctx, composeContainers, activeProjectNames, s.buildContainerUpdateFilterInternal(ctx), out)
 	return nil
 }
 

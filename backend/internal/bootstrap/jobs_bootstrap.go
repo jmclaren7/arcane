@@ -329,7 +329,7 @@ func setupSettingsSubscriptionsInternal(params settingsSubscriptionsParams) erro
 	)
 
 	subscribe(
-		[]string{"autoHealEnabled", "autoHealInterval", "autoHealExcludedContainers", "autoHealMaxRestarts", "autoHealRestartWindow"},
+		[]string{"autoHealEnabled", "autoHealInterval", "autoHealExcludedContainers", "autoHealIncludeMode", "autoHealMaxRestarts", "autoHealRestartWindow"},
 		func(_ []libarcane.SettingUpdate) {
 			if err := params.Scheduler.RescheduleJob(params.LifecycleCtx, params.AutoHeal); err != nil {
 				slog.WarnContext(params.LifecycleCtx, "Failed to reschedule auto-heal job", "error", err)

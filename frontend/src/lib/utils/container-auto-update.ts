@@ -34,10 +34,20 @@ export function parseExcludedContainerSet(csv?: string): Set<string> {
 	);
 }
 
-/** True when the container is excluded from auto-updates, by label or by setting. */
-export function isAutoUpdateIgnored(name: string, labels: Record<string, string> | undefined, excludedCsv?: string): boolean {
+/**
+ * True when the container is excluded from auto-updates, by label or by setting.
+ * With `includeMode` (the `autoUpdateIncludeMode` setting) the CSV lists the
+ * containers to include, so everything not listed is ignored.
+ */
+export function isAutoUpdateIgnored(
+	name: string,
+	labels: Record<string, string> | undefined,
+	excludedCsv?: string,
+	includeMode?: boolean
+): boolean {
 	if (isAutoUpdateLabelDisabled(labels)) return true;
 	const normalized = normalizeContainerName(name ?? '');
 	if (!normalized) return false;
-	return parseExcludedContainerSet(excludedCsv).has(normalized);
+	const listed = parseExcludedContainerSet(excludedCsv).has(normalized);
+	return includeMode ? !listed : listed;
 }

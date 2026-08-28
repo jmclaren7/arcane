@@ -285,8 +285,10 @@
 		lifecycleDefaultRunnerImage: settings?.lifecycleDefaultRunnerImage || 'alpine:latest',
 		lifecycleMaxTimeoutSec: settings?.lifecycleMaxTimeoutSec ?? 300,
 		autoUpdateExcludedContainers: settings?.autoUpdateExcludedContainers || '',
+		autoUpdateIncludeMode: settings?.autoUpdateIncludeMode ?? false,
 		autoHealEnabled: settings?.autoHealEnabled ?? false,
 		autoHealExcludedContainers: settings?.autoHealExcludedContainers || '',
+		autoHealIncludeMode: settings?.autoHealIncludeMode ?? false,
 		autoHealMaxRestarts: settings?.autoHealMaxRestarts ?? 5,
 		autoHealRestartWindow: settings?.autoHealRestartWindow ?? 30
 	});
@@ -347,8 +349,10 @@
 				lifecycleDefaultRunnerImage: formData.lifecycleDefaultRunnerImage,
 				lifecycleMaxTimeoutSec: formData.lifecycleMaxTimeoutSec,
 				autoUpdateExcludedContainers: formData.autoUpdateExcludedContainers,
+				autoUpdateIncludeMode: formData.autoUpdateIncludeMode,
 				autoHealEnabled: formData.autoHealEnabled,
 				autoHealExcludedContainers: formData.autoHealExcludedContainers,
+				autoHealIncludeMode: formData.autoHealIncludeMode,
 				autoHealMaxRestarts: formData.autoHealMaxRestarts,
 				autoHealRestartWindow: formData.autoHealRestartWindow
 			});

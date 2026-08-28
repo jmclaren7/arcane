@@ -1032,3 +1032,28 @@ func setupProjectTestDBInternal(t *testing.T) *database.DB {
 	require.NoError(t, db.AutoMigrate(&project.Project{}, &settings.SettingVariable{}, &imageupdate.ImageUpdateRecord{}, &event.Event{}))
 	return &database.DB{DB: db}
 }
+
+func TestUpdaterService_CollectComposeImagesHonorsContainerFilterInternal(t *testing.T) {
+	svc := &UpdaterService{}
+	active := map[string]struct{}{"proj": {}}
+	composeContainers := []container.Summary{
+		{ID: "c1", Names: []string{"/web"}, Image: "nginx:1.27", Labels: map[string]string{"com.docker.compose.project": "proj"}},
+		{ID: "c2", Names: []string{"/cache"}, Image: "redis:7", Labels: map[string]string{"com.docker.compose.project": "proj"}},
+	}
+
+	out := map[string]struct{}{}
+	svc.collectUsedImagesFromComposeContainersInternal(context.Background(), composeContainers, active,
+		containerUpdateFilterInternal{names: map[string]bool{"cache": true}}, out)
+	require.Len(t, out, 1)
+
+	out = map[string]struct{}{}
+	svc.collectUsedImagesFromComposeContainersInternal(context.Background(), composeContainers, active,
+		containerUpdateFilterInternal{names: map[string]bool{"web": true}, includeMode: true}, out)
+	require.Len(t, out, 1)
+
+	// Include mode with an empty list collects nothing.
+	out = map[string]struct{}{}
+	svc.collectUsedImagesFromComposeContainersInternal(context.Background(), composeContainers, active,
+		containerUpdateFilterInternal{names: map[string]bool{}, includeMode: true}, out)
+	require.Empty(t, out)
+}

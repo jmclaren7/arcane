@@ -205,6 +205,7 @@ func DefaultSettingsConfig() *Settings {
 		AutoUpdate:                     SettingVariable{Value: "false"},
 		AutoUpdateInterval:             SettingVariable{Value: "0 0 0 * * *"},
 		AutoUpdateExcludedContainers:   SettingVariable{Value: ""},
+		AutoUpdateIncludeMode:          SettingVariable{Value: "false"},
 		PollingEnabled:                 SettingVariable{Value: "true"},
 		PollingInterval:                SettingVariable{Value: "0 0 * * * *"},
 		ImageEventWatcherEnabled:       SettingVariable{Value: "false"},
@@ -232,6 +233,7 @@ func DefaultSettingsConfig() *Settings {
 		AutoHealEnabled:                SettingVariable{Value: "false"},
 		AutoHealInterval:               SettingVariable{Value: "*/30 * * * * *"},
 		AutoHealExcludedContainers:     SettingVariable{Value: ""},
+		AutoHealIncludeMode:            SettingVariable{Value: "false"},
 		AutoHealMaxRestarts:            SettingVariable{Value: "5"},
 		AutoHealRestartWindow:          SettingVariable{Value: "30"},
 		VolumeHelperIdleTimeout:        SettingVariable{Value: "10"},
@@ -950,12 +952,19 @@ func (s *SettingsService) SetStringSetting(ctx context.Context, key, value strin
 
 // SetContainerAutoUpdateExclusionInternal adds or removes a container name from
 // the autoUpdateExcludedContainers setting. When excluded is true the container
-// is added to the list; when false it is removed.
+// is added to the list; when false it is removed. With autoUpdateIncludeMode
+// enabled the list holds included containers instead, so the operation inverts:
+// excluding removes the name from the list and un-excluding adds it.
 func (s *SettingsService) SetContainerAutoUpdateExclusionInternal(ctx context.Context, containerName string, excluded bool) error {
 	_, err := s.writes.Execute(ctx, "update container auto-update exclusion", func(writeCtx context.Context) (actors.NoPayload, error) {
 		ordered := utils.UniqueNonEmptyStrings(strings.Split(s.GetStringSetting(writeCtx, "autoUpdateExcludedContainers", ""), ","))
 
-		if excluded {
+		addToList := excluded
+		if s.GetBoolSetting(writeCtx, "autoUpdateIncludeMode", false) {
+			addToList = !excluded
+		}
+
+		if addToList {
 			if !slices.Contains(ordered, containerName) {
 				ordered = append(ordered, containerName)
 			}

@@ -109,6 +109,7 @@
 	}));
 
 	const excludedContainers = $derived(settingsQuery.data?.autoUpdateExcludedContainers ?? '');
+	const autoUpdateIncludeMode = $derived(settingsQuery.data?.autoUpdateIncludeMode ?? false);
 
 	const projectUpdateDetailsQuery = createQuery<Record<string, ImageUpdateInfoDto>>(() => {
 		const environmentId = envId;
@@ -251,6 +252,7 @@
 						<ContainerUpdatesTable
 							{containers}
 							{excludedContainers}
+							{autoUpdateIncludeMode}
 							bind:requestOptions={containerRequestOptions}
 							onIgnoreChanged={() => settingsQuery.refetch()}
 							onRefreshData={async (options) => {

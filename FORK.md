@@ -12,11 +12,13 @@ GoReleaser Pro, Depot runners, and cosign secrets. Everything the fork carries
 falls into three buckets: **infrastructure adaptations** so CI, image builds,
 and the dev container work outside upstream's environment (changes #2, #3, #5,
 #12); **documentation** describing the fork itself and filling gaps in the
-contributor setup docs (#1, #4); and a small set of **behavioural fixes and
-UI refinements** that are genuinely upstreamable but haven't been submitted or
+contributor setup docs (#1, #4); and a small set of **behavioural fixes,
+UI refinements and small self-contained features** that are genuinely
+upstreamable but haven't been submitted or
 merged yet (#6–#10, #13–#16) — plus one piece of fork-only debt, the
-migration-renumbering startup repair (#11). The fork deliberately carries no product features of
-its own and no divergent architecture — every rebase resolves conflicts in
+migration-renumbering startup repair (#11). The fork deliberately carries no
+divergent architecture and nothing that couldn't be offered upstream as-is —
+every rebase resolves conflicts in
 favour of upstream unless the entry below marks the fork side as intentional,
 and any change upstream implements independently is dropped rather than
 maintained.
@@ -1029,7 +1031,9 @@ When you rebase, work through every entry below. For each one:
   include list — so the engine's apply/restart paths honor the mode without a
   module change; drop the materialization if the engine ever grows a native
   include mode. Arcane-internal filtering is mode-aware directly
-  (`buildContainerUpdateFilterInternal` in the updater service,
+  (`buildContainerUpdateFilterInternal` in the updater service — applied to
+  **both** used-image collection paths, direct containers and Compose-project
+  containers, or "include none" is not a true no-op — and
   `parseContainerFilterInternal` in the auto-heal job).
   `SetContainerAutoUpdateExclusionInternal` — which backs the per-container
   auto-update toggle and the Updates-page ignore action — inverts its

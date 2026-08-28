@@ -65,7 +65,12 @@
 	let autoUpdateOverride = $state<boolean | null>(null);
 	const autoUpdateEnabled = $derived(
 		autoUpdateOverride ??
-			!isAutoUpdateIgnored(container?.name ?? '', container?.labels, data?.settings?.autoUpdateExcludedContainers)
+			!isAutoUpdateIgnored(
+				container?.name ?? '',
+				container?.labels,
+				data?.settings?.autoUpdateExcludedContainers,
+				data?.settings?.autoUpdateIncludeMode
+			)
 	);
 
 	const cleanContainerName = (name: string | undefined): string => {

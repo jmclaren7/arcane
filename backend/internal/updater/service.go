@@ -645,18 +645,41 @@ func (s *UpdaterService) RecordUpdateRun(ctx context.Context, result updater.Res
 	return s.recordRunInternal(ctx, resourceResultFromModuleInternal(result))
 }
 
-// ExcludedContainers returns auto-update exclusions from Arcane settings.
+// ExcludedContainers returns auto-update exclusions from Arcane settings. In
+// include mode the configured names are the only containers allowed to update,
+// so the exclusion list is materialized from every other known container.
 func (s *UpdaterService) ExcludedContainers(ctx context.Context) ([]string, error) {
 	if s == nil {
 		return nil, nil
 	}
-	excluded := s.buildExcludedContainerSetInternal(ctx)
-	if len(excluded) == 0 {
-		return nil, nil
+	filter := s.buildContainerUpdateFilterInternal(ctx)
+	if !filter.includeMode {
+		if len(filter.names) == 0 {
+			return nil, nil
+		}
+		out := make([]string, 0, len(filter.names))
+		for name := range filter.names {
+			out = append(out, name)
+		}
+		return out, nil
 	}
-	out := make([]string, 0, len(excluded))
-	for name := range excluded {
-		out = append(out, name)
+
+	if s.deps.Docker == nil {
+		return nil, errors.New("docker client unavailable to resolve include-mode exclusions")
+	}
+	dcli, err := s.deps.Docker.GetClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	listResult, err := dcli.ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, summary := range listResult.Items {
+		if name := dockerutil.ContainerNameFromNames(summary.Names); name != "" && !filter.names[name] {
+			out = append(out, name)
+		}
 	}
 	return out, nil
 }
@@ -1175,7 +1198,7 @@ func (s *UpdaterService) collectUsedImagesFromContainersInternal(ctx context.Con
 		return nil
 	}
 
-	excludedContainers := s.buildExcludedContainerSetInternal(ctx)
+	updateFilter := s.buildContainerUpdateFilterInternal(ctx)
 	listResult, err := dcli.ContainerList(ctx, client.ContainerListOptions{All: false})
 	if err != nil {
 		return err
@@ -1187,7 +1210,7 @@ func (s *UpdaterService) collectUsedImagesFromContainersInternal(ctx context.Con
 			continue
 		}
 
-		if containerSummaryExcludedInternal(summary, excludedContainers) {
+		if updateFilter.excludesInternal(summary.Names) {
 			s.loggerInternal().DebugContext(ctx, "collectUsedImagesFromContainers: skipping excluded container", "containerId", summary.ID, "names", summary.Names)
 			continue
 		}
@@ -1261,21 +1284,40 @@ func (s *UpdaterService) normalizedTagsForContainerInternal(ctx context.Context,
 	return out
 }
 
-func (s *UpdaterService) buildExcludedContainerSetInternal(ctx context.Context) map[string]bool {
-	if s.deps.Settings == nil {
-		return nil
-	}
-	raw := s.deps.Settings.GetStringSetting(ctx, "autoUpdateExcludedContainers", "")
-	if raw == "" {
-		return nil
-	}
-	excluded := make(map[string]bool)
-	for part := range strings.SplitSeq(raw, ",") {
-		if name := strings.TrimSpace(part); name != "" {
-			excluded[name] = true
+// containerUpdateFilterInternal is the parsed auto-update container list plus
+// the mode deciding whether listed names are excluded or exclusively included.
+type containerUpdateFilterInternal struct {
+	names       map[string]bool
+	includeMode bool
+}
+
+func (f containerUpdateFilterInternal) excludesInternal(names []string) bool {
+	listed := false
+	for _, name := range names {
+		if f.names[strings.TrimPrefix(name, "/")] {
+			listed = true
+			break
 		}
 	}
-	return excluded
+	if f.includeMode {
+		return !listed
+	}
+	return listed
+}
+
+func (s *UpdaterService) buildContainerUpdateFilterInternal(ctx context.Context) containerUpdateFilterInternal {
+	filter := containerUpdateFilterInternal{names: make(map[string]bool)}
+	if s.deps.Settings == nil {
+		return filter
+	}
+	filter.includeMode = s.deps.Settings.GetBoolSetting(ctx, "autoUpdateIncludeMode", false)
+	raw := s.deps.Settings.GetStringSetting(ctx, "autoUpdateExcludedContainers", "")
+	for part := range strings.SplitSeq(raw, ",") {
+		if name := strings.TrimSpace(part); name != "" {
+			filter.names[name] = true
+		}
+	}
+	return filter
 }
 
 func (s *UpdaterService) collectUsedImagesFromProjectsInternal(ctx context.Context, out map[string]struct{}) error {
@@ -1346,16 +1388,4 @@ func addNormalizedImageUpdateRefInternal(ctx context.Context, out map[string]str
 		return
 	}
 	slog.Debug(logMessage, args...)
-}
-
-func containerSummaryExcludedInternal(summary container.Summary, excludedContainers map[string]bool) bool {
-	if len(excludedContainers) == 0 {
-		return false
-	}
-	for _, name := range summary.Names {
-		if excludedContainers[strings.TrimPrefix(name, "/")] {
-			return true
-		}
-	}
-	return false
 }

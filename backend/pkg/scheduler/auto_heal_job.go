@@ -131,13 +131,13 @@ func (j *AutoHealJob) Run(ctx context.Context) {
 	}
 	containers := containerList
 
-	excludedContainers := j.parseExcludedContainers(ctx)
+	containerFilter := j.parseContainerFilterInternal(ctx)
 	maxRestarts := j.settingsService.GetIntSetting(ctx, "autoHealMaxRestarts", 5)
 	restartWindowMinutes := j.settingsService.GetIntSetting(ctx, "autoHealRestartWindow", 30)
 	restartWindow := time.Duration(restartWindowMinutes) * time.Minute
 
 	selfID := j.selfContainerIDInternal(ctx)
-	candidates := j.filterCandidatesInternal(containers, excludedContainers, selfID)
+	candidates := j.filterCandidatesInternal(containers, containerFilter, selfID)
 
 	g, groupCtx := errgroup.WithContext(ctx)
 	g.SetLimit(autoHealInspectConcurrency)
@@ -174,7 +174,7 @@ func (j *AutoHealJob) selfContainerIDInternal(ctx context.Context) string {
 	return j.selfID
 }
 
-func (j *AutoHealJob) filterCandidatesInternal(containers []container.Summary, excludedContainers map[string]struct{}, selfID string) []container.Summary {
+func (j *AutoHealJob) filterCandidatesInternal(containers []container.Summary, containerFilter autoHealContainerFilterInternal, selfID string) []container.Summary {
 	candidates := make([]container.Summary, 0, len(containers))
 	for _, c := range containers {
 		// Never restart the container Arcane itself runs in: a slow or
@@ -190,7 +190,7 @@ func (j *AutoHealJob) filterCandidatesInternal(containers []container.Summary, e
 		}
 
 		containerName := dockerutil.ContainerNameFromNames(c.Names)
-		if j.isExcluded(containerName, excludedContainers) {
+		if containerFilter.excludesInternal(containerName) {
 			continue
 		}
 
@@ -376,24 +376,33 @@ func (j *AutoHealJob) pruneTimestamps(timestamps []time.Time, cutoff time.Time) 
 	return result
 }
 
-func (j *AutoHealJob) parseExcludedContainers(ctx context.Context) map[string]struct{} {
-	raw := j.settingsService.GetStringSetting(ctx, "autoHealExcludedContainers", "")
-	excluded := make(map[string]struct{})
-	if raw == "" {
-		return excluded
-	}
-	for name := range strings.SplitSeq(raw, ",") {
-		trimmed := strings.TrimSpace(name)
-		if trimmed != "" {
-			excluded[trimmed] = struct{}{}
-		}
-	}
-	return excluded
+// autoHealContainerFilterInternal is the parsed auto-heal container list plus
+// the mode deciding whether listed names are excluded or exclusively included.
+type autoHealContainerFilterInternal struct {
+	names       map[string]struct{}
+	includeMode bool
 }
 
-func (j *AutoHealJob) isExcluded(name string, excluded map[string]struct{}) bool {
-	_, ok := excluded[name]
-	return ok
+func (f autoHealContainerFilterInternal) excludesInternal(name string) bool {
+	_, listed := f.names[name]
+	if f.includeMode {
+		return !listed
+	}
+	return listed
+}
+
+func (j *AutoHealJob) parseContainerFilterInternal(ctx context.Context) autoHealContainerFilterInternal {
+	filter := autoHealContainerFilterInternal{
+		names:       make(map[string]struct{}),
+		includeMode: j.settingsService.GetBoolSetting(ctx, "autoHealIncludeMode", false),
+	}
+	raw := j.settingsService.GetStringSetting(ctx, "autoHealExcludedContainers", "")
+	for name := range strings.SplitSeq(raw, ",") {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			filter.names[trimmed] = struct{}{}
+		}
+	}
+	return filter
 }
 
 func (j *AutoHealJob) inspectContainerInternal(ctx context.Context, dockerClient *client.Client, containerID string) (container.InspectResponse, error) {

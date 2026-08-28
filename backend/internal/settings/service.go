@@ -1051,26 +1051,16 @@ func (s *SettingsService) SetContainerAutoUpdateExclusionInternal(ctx context.Co
 		return err
 	}
 
-		addToList := excluded
-		if s.GetBoolSetting(writeCtx, "autoUpdateIncludeMode", false) {
-			addToList = !excluded
-		}
+	ordered := kit.Unique(kit.TrimNonEmpty(strings.Split(s.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""), ",")))
 
-		if addToList {
-			if !slices.Contains(ordered, containerName) {
-				ordered = append(ordered, containerName)
-			}
-		} else {
-			filtered := ordered[:0]
-			for _, name := range ordered {
-				if name != containerName {
-					filtered = append(filtered, name)
-				}
-			}
-			ordered = filtered
-		}
+	// Include mode turns the list into an allowlist, so "exclude this container"
+	// means dropping it from the list and "un-exclude" means adding it.
+	addToList := excluded
+	if s.GetBoolSetting(ctx, "autoUpdateIncludeMode", false) {
+		addToList = !excluded
+	}
 
-	if excluded {
+	if addToList {
 		ordered = kit.Unique(append(ordered, containerName))
 	} else {
 		filtered := ordered[:0]

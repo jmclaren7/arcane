@@ -14,7 +14,7 @@ and the dev container work outside upstream's environment (changes #2, #3, #5,
 #12); **documentation** describing the fork itself and filling gaps in the
 contributor setup docs (#1, #4); and a small set of **behavioural fixes and
 UI refinements** that are genuinely upstreamable but haven't been submitted or
-merged yet (#6–#10, #13–#15) — plus one piece of fork-only debt, the
+merged yet (#6–#10, #13–#16) — plus one piece of fork-only debt, the
 migration-renumbering startup repair (#11). The fork deliberately carries no product features of
 its own and no divergent architecture — every rebase resolves conflicts in
 favour of upstream unless the entry below marks the fork side as intentional,
@@ -756,6 +756,11 @@ When you rebase, work through every entry below. For each one:
   the skipped upstream migrations; the tests compare a repaired database's
   schema against a from-scratch migration (and assert the replayed renames'
   and column defaults' data effects), so drift is caught rather than shipped.
+  CI's `gocognit` lint caps functions at cognitive complexity 30 and the
+  repair sits right at the edge — the missing-column probe already lives in a
+  `missingBackupSupportColumnsInternal` helper for that reason, so if a future
+  renumbering adds a fourth replay, extract it as a helper too rather than
+  growing the main function.
   **Delete the whole
   thing** — repair, constants, the tests, and the README's closing sentence
   about it — once no pre-074 database is left running, which for a personal
@@ -980,6 +985,72 @@ When you rebase, work through every entry below. For each one:
   a regular one. Drop the reconcile half if upstream adds its own
   cleanup for links to deleted syncs (a migration or a startup repair); drop
   the whole entry if upstream ships a way to unmanage a GitOps project.
+
+### 16. Include-mode switch for automation container lists
+
+- **Files:** `backend/internal/settings/model.go`,
+  `backend/internal/settings/service.go`,
+  `backend/internal/settings/service_test.go`,
+  `backend/internal/updater/service.go`,
+  `backend/pkg/scheduler/auto_heal_job.go`,
+  `backend/pkg/scheduler/auto_heal_job_test.go`,
+  `backend/internal/bootstrap/jobs_bootstrap.go`,
+  `backend/internal/config/schema/schema.go`,
+  `backend/internal/config/schema/schema_test.go`,
+  `types/settings/settings.go`,
+  `frontend/src/routes/(app)/environments/[id]/components/JobsTab.svelte`,
+  `frontend/src/routes/(app)/environments/[id]/components/environment-form-schema.ts`,
+  `frontend/src/routes/(app)/environments/[id]/+page.svelte`,
+  `frontend/src/lib/types/settings.ts`,
+  `frontend/src/lib/utils/container-auto-update.ts`,
+  `frontend/src/routes/(app)/updates/+page.svelte`,
+  `frontend/src/routes/(app)/updates/container-updates-table.svelte`,
+  `frontend/src/routes/(app)/containers/[containerId]/+page.svelte`,
+  `frontend/messages/en.json`
+- **What:** Every environment automation that carries an "Excluded Containers"
+  list — auto-update and auto-heal, on the environment Jobs tab — gets an
+  "Include mode" switch (new boolean settings `autoUpdateIncludeMode` and
+  `autoHealIncludeMode`, both defaulting to `false`) that inverts the list
+  into "Include Containers": only the listed containers are affected by the
+  automation and every other container is excluded. The names stay in the
+  existing `autoUpdateExcludedContainers` / `autoHealExcludedContainers` CSVs;
+  the mode only changes how the list is interpreted, so there is no migration
+  and existing installs behave exactly as before. The Jobs-tab card flips its
+  heading and description with the mode, and the ignored/enabled state shown
+  on the Updates page and container detail page follows it.
+- **Why:** In a lab where only a handful of containers should auto-update or
+  auto-heal, an exclusion list has to be re-edited every time a container is
+  added; include mode expresses "only these" directly as an allowlist.
+- **Re-apply notes:** The intent has one non-obvious constraint: the embedded
+  updater engine (`go.getarcane.app/updater`) only understands an *exclusion*
+  list through its `SettingsProvider.ExcludedContainers` port. In include mode
+  Arcane's implementation of that port (`UpdaterService.ExcludedContainers`)
+  materializes the inverse — the names of all Docker containers *not* on the
+  include list — so the engine's apply/restart paths honor the mode without a
+  module change; drop the materialization if the engine ever grows a native
+  include mode. Arcane-internal filtering is mode-aware directly
+  (`buildContainerUpdateFilterInternal` in the updater service,
+  `parseContainerFilterInternal` in the auto-heal job).
+  `SetContainerAutoUpdateExclusionInternal` — which backs the per-container
+  auto-update toggle and the Updates-page ignore action — inverts its
+  add/remove in include mode so "enable auto-update" always means "make this
+  container updatable" regardless of mode, and the frontend's
+  `isAutoUpdateIgnored` takes an `includeMode` parameter that every
+  settings-driven display passes. Semantics to preserve: include mode with an
+  empty list affects **no** containers (the list is the allowlist), and the
+  `com.getarcaneapp.arcane.updater=false` label still overrides the list in
+  both modes. A new setting key touches more places than the model struct:
+  defaults in the settings service, the `Update` DTO in
+  `types/settings/settings.go`, `overrideDocRules` and
+  `expectedSettingOverrideKeys` in the config schema (+test), and — for
+  auto-heal — the reschedule subscription key list in `jobs_bootstrap.go`.
+  Upstreamable as a self-contained feature. Verify with `go test
+  ./internal/settings/... ./internal/updater/... ./pkg/scheduler/...
+  ./internal/config/...` and `pnpm -C frontend check`.
+- **Redundancy check:** Upstream's automation container lists are
+  exclusion-only with no inversion switch — **keep**. Drop if upstream ships
+  its own include/allowlist mode for these automations (watch for a rename of
+  the `*ExcludedContainers` settings or a mode/select setting beside them).
 
 ---
 

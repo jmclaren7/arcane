@@ -99,6 +99,9 @@ var overrideDocRules = map[string]overrideDocRule{
 	"autoUpdateInterval": {
 		requires: "AUTO_UPDATE=true to have effect at runtime.",
 	},
+	"autoUpdateIncludeMode": {
+		requires: "AUTO_UPDATE=true to have effect at runtime.",
+	},
 	"scheduledPruneInterval": {
 		requires: "SCHEDULED_PRUNE_ENABLED=true to have effect at runtime.",
 	},
@@ -145,6 +148,9 @@ var overrideDocRules = map[string]overrideDocRule{
 		requires: "AUTO_HEAL_ENABLED=true to have effect at runtime.",
 	},
 	"autoHealExcludedContainers": {
+		requires: "AUTO_HEAL_ENABLED=true to have effect at runtime.",
+	},
+	"autoHealIncludeMode": {
 		requires: "AUTO_HEAL_ENABLED=true to have effect at runtime.",
 	},
 	"autoHealMaxRestarts": {

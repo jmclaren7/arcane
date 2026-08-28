@@ -38,18 +38,39 @@ func TestAutoHeal_FilterCandidates_SkipsSelfContainer(t *testing.T) {
 	}
 
 	// Hostname-based detection yields the short 12-char ID.
-	candidates := job.filterCandidatesInternal(containers, nil, selfFullID[:12])
+	candidates := job.filterCandidatesInternal(containers, autoHealContainerFilterInternal{}, selfFullID[:12])
 	require.Len(t, candidates, 1)
 	require.Equal(t, "/other", candidates[0].Names[0])
 
 	// cgroup/mountinfo-based detection yields the full ID.
-	candidates = job.filterCandidatesInternal(containers, nil, selfFullID)
+	candidates = job.filterCandidatesInternal(containers, autoHealContainerFilterInternal{}, selfFullID)
 	require.Len(t, candidates, 1)
 	require.Equal(t, "/other", candidates[0].Names[0])
 
 	// Outside Docker no self ID is detected and the guard is a no-op.
-	candidates = job.filterCandidatesInternal(containers, nil, "")
+	candidates = job.filterCandidatesInternal(containers, autoHealContainerFilterInternal{}, "")
 	require.Len(t, candidates, 2)
+}
+
+func TestAutoHeal_ContainerFilter_IncludeMode(t *testing.T) {
+	ctx := context.Background()
+	_, settingsSvc, _ := setupAnalyticsStateServicesInternal(t)
+	job, err := NewAutoHealJob(nil, settingsSvc, nil, nil, newTestAdmissionGateInternal(t))
+	require.NoError(t, err)
+
+	require.NoError(t, settingsSvc.SetStringSetting(ctx, "autoHealExcludedContainers", "one, two"))
+
+	filter := job.parseContainerFilterInternal(ctx)
+	require.False(t, filter.includeMode)
+	require.True(t, filter.excludesInternal("one"))
+	require.False(t, filter.excludesInternal("three"))
+
+	require.NoError(t, settingsSvc.SetBoolSetting(ctx, "autoHealIncludeMode", true))
+
+	filter = job.parseContainerFilterInternal(ctx)
+	require.True(t, filter.includeMode)
+	require.False(t, filter.excludesInternal("one"))
+	require.True(t, filter.excludesInternal("three"))
 }
 
 func TestAutoHeal_CanRestart_UnderLimit(t *testing.T) {

@@ -205,6 +205,7 @@ func DefaultSettingsConfig() *Settings {
 		AutoUpdate:                            SettingVariable{Value: "false"},
 		AutoUpdateInterval:                    SettingVariable{Value: "0 0 0 * * *"},
 		AutoUpdateExcludedContainers:          SettingVariable{Value: ""},
+		AutoUpdateIncludeMode:                 SettingVariable{Value: "false"},
 		PollingEnabled:                        SettingVariable{Value: "true"},
 		PollingInterval:                       SettingVariable{Value: "0 0 * * * *"},
 		ImageEventWatcherEnabled:              SettingVariable{Value: "false"},
@@ -233,6 +234,7 @@ func DefaultSettingsConfig() *Settings {
 		AutoHealEnabled:                       SettingVariable{Value: "false"},
 		AutoHealInterval:                      SettingVariable{Value: "0 */5 * * * *"},
 		AutoHealExcludedContainers:            SettingVariable{Value: ""},
+		AutoHealIncludeMode:                   SettingVariable{Value: "false"},
 		AutoHealMaxRestarts:                   SettingVariable{Value: "5"},
 		AutoHealRestartWindow:                 SettingVariable{Value: "30"},
 		VolumeHelperIdleTimeout:               SettingVariable{Value: "10"},
@@ -1039,7 +1041,9 @@ func (s *SettingsService) SetStringSetting(ctx context.Context, key, value strin
 
 // SetContainerAutoUpdateExclusionInternal adds or removes a container name from
 // the autoUpdateExcludedContainers setting. When excluded is true the container
-// is added to the list; when false it is removed.
+// is added to the list; when false it is removed. With autoUpdateIncludeMode
+// enabled the list holds included containers instead, so the operation inverts:
+// excluding removes the name from the list and un-excluding adds it.
 func (s *SettingsService) SetContainerAutoUpdateExclusionInternal(ctx context.Context, containerName string, excluded bool) error {
 	s.writes.Lock()
 	defer s.writes.Unlock()
@@ -1047,7 +1051,24 @@ func (s *SettingsService) SetContainerAutoUpdateExclusionInternal(ctx context.Co
 		return err
 	}
 
-	ordered := kit.Unique(kit.TrimNonEmpty(strings.Split(s.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""), ",")))
+		addToList := excluded
+		if s.GetBoolSetting(writeCtx, "autoUpdateIncludeMode", false) {
+			addToList = !excluded
+		}
+
+		if addToList {
+			if !slices.Contains(ordered, containerName) {
+				ordered = append(ordered, containerName)
+			}
+		} else {
+			filtered := ordered[:0]
+			for _, name := range ordered {
+				if name != containerName {
+					filtered = append(filtered, name)
+				}
+			}
+			ordered = filtered
+		}
 
 	if excluded {
 		ordered = kit.Unique(append(ordered, containerName))

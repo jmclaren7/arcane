@@ -318,14 +318,9 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 	// re-adding an existing column would abort the whole repair.
 	var missingBackupColumns []string
 	if lateRenumberVersionRecorded {
-		for _, column := range backupSupportVolumeBackupColumnsInternal {
-			present, err := columnExistsInternal(ctx, db, dbProvider, "volume_backups", column.name)
-			if err != nil {
-				return err
-			}
-			if !present {
-				missingBackupColumns = append(missingBackupColumns, column.name)
-			}
+		missingBackupColumns, err = missingBackupSupportColumnsInternal(ctx, db, dbProvider)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -379,6 +374,22 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		"restoredSkippedMigration", !repositoryNamesPresent, "replayedVolumeWorkspaceRename", midRenumberVersionRecorded,
 		"replayedBackupSupport", lateRenumberVersionRecorded)
 	return nil
+}
+
+// missingBackupSupportColumnsInternal lists the volume_backups columns from the
+// backup-support migration that the database does not have yet.
+func missingBackupSupportColumnsInternal(ctx context.Context, db *sql.DB, dbProvider string) ([]string, error) {
+	var missing []string
+	for _, column := range backupSupportVolumeBackupColumnsInternal {
+		present, err := columnExistsInternal(ctx, db, dbProvider, "volume_backups", column.name)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			missing = append(missing, column.name)
+		}
+	}
+	return missing, nil
 }
 
 // hasPreRenumberForkMigrationStateInternal reports whether gitops_syncs.inject_commit_env

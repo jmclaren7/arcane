@@ -47,11 +47,88 @@ When you rebase, work through every entry below. For each one:
 4. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Superseded" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `c8ad3ed` — _chore(translations): update
-> translations via Crowdin (#3695)_, on 2026-08-22. _(Previously `b8bc5b4f`,
-> 2026-08-15.)_
+> **Last rebased onto upstream:** `96729f7` — _chore(translations): update
+> translations via Crowdin (#3774)_, on 2026-08-29. _(Previously `c8ad3ed`,
+> 2026-08-22.)_
 >
-> This rebase carried 48 new upstream commits: the 2.8.1 release, automated
+> This rebase carried 71 new upstream commits: the 2.9.0 release, GitOps
+> pull/redeploy-after-sync toggles (`f17e844`) — which claimed migration
+> number **074** — copacetic direct image patching (`3617720`, migration
+> **075**), vulnerability reports moved into the database (`53e7e82`,
+> migration **076**), selective system restores (`874134c`), experimental
+> convert-to-compose for running containers (`9aef34e`), the E2E test images
+> switched to `public.ecr.aws` (`081c9ac`), UI container exclusions honored
+> in image update discovery (`b9b2092`), leftover git-clone scratch
+> directories purged by a new job (`d57d18f`), partial-update DTOs
+> serialized with `omitzero` (`2459256`), a native-Temporal time/date
+> refactor (`60c2dee`), and the usual dependency bumps and Crowdin updates.
+> The headline outcomes:
+>
+> 1. **The fork migration renumbered a fourth time, `074` → `077`,** because
+>    upstream's pull/redeploy work claimed 074 (and 075/076 followed). This
+>    re-created the collision change #11 exists for, one number later: a lab
+>    database migrated by a 074-era fork build has version 74 recorded for
+>    the *fork's* migration, so upstream's real 074 (the pull/redeploy
+>    columns) would be silently skipped and 077 would abort on the duplicate
+>    `inject_commit_env` column. Change #11's repair was extended with a
+>    fourth constant (`forkCommitEnvLastRenumberVersion = 74`) and a replay
+>    of upstream 074's `gitops_syncs` columns, guarded by a pre-computed
+>    missing-column list; the era detection was extracted into
+>    `recordedRenumberEraVersionsInternal` to stay under the gocognit cap.
+>    Covered by `TestMigrateDatabase_RepairsLastRenumberForkMigrationState`.
+> 2. **Change #10 merged around the pull/redeploy feature.** Upstream's
+>    `f17e844` adds `PullImageAfterSync`/`RedeployAfterSync` to the same
+>    model, DTOs and dialog the fork's `InjectCommitEnv` lives in; all four
+>    files were stitched to carry both. Note upstream's `2459256` switched
+>    `UpdateSyncRequest` fields to `omitzero` — the fork's `InjectCommitEnv`
+>    field there follows suit (the create DTO stays `omitempty` like its
+>    neighbours).
+> 3. **Change #12 re-derived onto upstream's ECR switch.** `081c9ac` moved
+>    the E2E fixtures to `public.ecr.aws/nginx/nginx:stable-alpine`, added a
+>    busybox prefetch for the new update-check specs, dropped the radarr
+>    image entirely, and extended the (still unread) `docker save` tarball.
+>    The exposure #12 exists for — anonymous per-IP rate limits on
+>    `public.ecr.aws` — is unchanged, so nginx stays on `mirror.gcr.io`
+>    (fixtures and prefetch together); busybox/minio/rustic stay on their
+>    upstream registries wrapped in `pull_with_retry`; the radarr prefetch
+>    and the dead `docker save` stay dropped. The update-check specs
+>    (`image-updates.spec.ts`, `updates.spec.ts`) query registry metadata by
+>    reference without pulling, so their ECR names are left at upstream.
+> 4. **Change #16 extended into update discovery.** Upstream's `b9b2092`
+>    taught `getAllImageRefsInternal` (`internal/imageupdate`) to drop
+>    images whose containers are on the exclusion list, reading the list as
+>    exclusion-only — with include mode on it would have skipped exactly the
+>    allowlisted containers. The fork now materializes the inverse set there
+>    in include mode (mirroring `UpdaterService.ExcludedContainers`), and
+>    the fork's mode-aware filter replaced upstream's now-orphaned
+>    `buildExcludedContainerSetInternal` in the updater service.
+>    `SetContainerAutoUpdateExclusionInternal` was rebased onto upstream's
+>    reworked `slices.Contains` list mechanics, keeping the inversion.
+> 5. **Upstream moved adjacent to change #13 without superseding it.**
+>    `d57d18f` purges leftover git-clone scratch directories via a new
+>    scheduled job but does not touch the filesystem watcher, so the
+>    watcher's scratch/snapshot exclusions (and the other five log fixes)
+>    all stand.
+>
+> Changes #1–#9 and #13–#15 replayed with zero conflicts and their
+> redundancy checks were re-verified against `96729f7`.
+>
+> Verified post-rebase: `go build ./...` and `go vet ./...` clean over the
+> whole backend; `go test ./internal/database/... ./pkg/projects/...
+> ./pkg/gitutil/... ./pkg/fswatch/... ./pkg/libarcane/edge/...
+> ./internal/gitops/... ./internal/apikey/... ./internal/role/...
+> ./internal/settings/... ./internal/updater/... ./internal/imageupdate/...
+> ./pkg/scheduler/... ./internal/config/... ./internal/project/...` passing
+> (including the new last-renumber repair and include-mode discovery tests;
+> the two known Docker-daemon-dependent `internal/project` tests fail
+> identically on pristine `upstream/main` in the same container, so they
+> are environmental, not fork regressions); and `pnpm -C frontend check`
+> reporting 0 errors / 0 warnings. Of the 71 commits, none superseded an
+> active fork change; all 16 active changes remain necessary.
+>
+> Earlier rebase (`c8ad3ed` — _chore(translations): update translations via
+> Crowdin (#3695)_, 2026-08-22; previously `b8bc5b4f`, 2026-08-15): carried
+> 48 new upstream commits: the 2.8.1 release, automated
 > S3/system backups (`555c5df`) — which claimed migration number **073** — a
 > dissolution of `backend/internal/models` into the domain packages
 > (`2bfc588`: `GitOpsSync`/`Project` now live in
@@ -662,7 +739,7 @@ When you rebase, work through every entry below. For each one:
   `backend/internal/gitops/gitops_sync.go`,
   `backend/internal/gitops/service_test.go`,
   `backend/internal/gitops/service_unix_test.go`,
-  `backend/resources/migrations/{sqlite,postgres}/074_add_gitops_sync_inject_commit_env.sql`,
+  `backend/resources/migrations/{sqlite,postgres}/077_add_gitops_sync_inject_commit_env.sql`,
   `types/gitops/gitops.go`, `frontend/src/lib/types/automation.ts`,
   `frontend/src/lib/components/dialogs/gitops-sync-dialog.svelte`,
   `frontend/messages/en.json`
@@ -692,7 +769,9 @@ When you rebase, work through every entry below. For each one:
   `071` at the `c9fa64b` rebase (upstream passkeys took `069`/`070`), then
   `071` → `073` at the `b8bc5b4f` rebase (upstream volume-workspace/project
   tags took `071`/`072`), then `073` → `074` at the `c8ad3ed` rebase
-  (upstream backup support took `073`) — each renumbering left lab databases
+  (upstream backup support took `073`), then `074` → `077` at the `96729f7`
+  rebase (upstream pull/redeploy-after-sync took `074`, image patches `075`,
+  vulnerability reports `076`) — each renumbering left lab databases
   with the old number recorded, which change #11 repairs at startup. The service code
   lives in `backend/internal/gitops/gitops_sync.go` since upstream's
   `1cea5f48` domain-package reorg. Injection has exactly two
@@ -717,8 +796,8 @@ When you rebase, work through every entry below. For each one:
 - **What:** Before running Goose upwards, detect a database that applied change
   #10's migration under one of its *old* numbers and repair it in place.
   `repairPreRenumberForkMigrationInternal` fires when
-  `gitops_syncs.inject_commit_env` exists while version `74` is unrecorded. It
-  applies everything below `74` through Goose first, then repairs whichever
+  `gitops_syncs.inject_commit_env` exists while version `77` is unrecorded. It
+  applies everything below `77` through Goose first, then repairs whichever
   historical shape it finds:
   - **069-era** (fork builds `f3b8e1e`..`130b45f`): version 69 was recorded
     for the fork's migration, so upstream's `069` was skipped — the repair
@@ -733,8 +812,13 @@ When you rebase, work through every entry below. For each one:
     guarded with `IF NOT EXISTS` plus a pre-computed missing-column list
     (SQLite's `ALTER TABLE` has no `IF NOT EXISTS`), so a crashed earlier
     repair can re-run it as a no-op.
+  - **074-era** (fork builds between the 2026-08-22 and 2026-08-29 rebases):
+    version 74 was recorded for the fork's migration, so upstream's `074`
+    (GitOps pull/redeploy-after-sync flags) was skipped — the repair replays
+    its two `gitops_syncs` ALTERs, filtered by a pre-computed missing-column
+    list, so a crashed earlier repair can re-run it as a no-op.
 
-  Finally it records `74` as applied instead of re-running its DDL (the
+  Finally it records `77` as applied instead of re-running its DDL (the
   column already exists).
 - **Why:** Goose keys its bookkeeping on the version number alone, so a
   database carrying the fork migration under an old number is broken in two
@@ -744,7 +828,8 @@ When you rebase, work through every entry below. For each one:
   treated as applied and skipped.
 - **Re-apply notes:** Purely fork debt from change #10's renumbering — nothing
   upstream will ever conflict with, though it sits in a file upstream does edit.
-  The constants (`forkCommitEnvMigrationVersion` = 74,
+  The constants (`forkCommitEnvMigrationVersion` = 77,
+  `forkCommitEnvLastRenumberVersion` = 74,
   `forkCommitEnvLateRenumberVersion` = 73,
   `forkCommitEnvMidRenumberVersion` = 71,
   `forkCommitEnvPreRenumberVersion` = 69) must be kept in step if a future
@@ -753,19 +838,22 @@ When you rebase, work through every entry below. For each one:
   and each new renumbering adds a new orphaned number whose upstream
   migration needs its own replay.
   `addSkippedRegistryRepositoryNamesColumnInternal`,
-  `replaySkippedVolumeWorkspaceRenameInternal` and
-  `replaySkippedBackupSupportInternal` duplicate the statements of
+  `replaySkippedVolumeWorkspaceRenameInternal`,
+  `replaySkippedBackupSupportInternal` and
+  `replaySkippedPullRedeployInternal` duplicate the statements of
   the skipped upstream migrations; the tests compare a repaired database's
   schema against a from-scratch migration (and assert the replayed renames'
   and column defaults' data effects), so drift is caught rather than shipped.
   CI's `gocognit` lint caps functions at cognitive complexity 30 and the
-  repair sits right at the edge — the missing-column probe already lives in a
-  `missingBackupSupportColumnsInternal` helper for that reason, so if a future
-  renumbering adds a fourth replay, extract it as a helper too rather than
+  repair sits right at the edge (exactly 30 as of the `96729f7` rebase) — the
+  missing-column probes live in `missingBackupSupportColumnsInternal` /
+  `missingPullRedeployColumnsInternal` helpers and the era detection in
+  `recordedRenumberEraVersionsInternal` for that reason, so if a future
+  renumbering adds a fifth replay, extract helpers again rather than
   growing the main function.
   **Delete the whole
   thing** — repair, constants, the tests, and the README's closing sentence
-  about it — once no pre-074 database is left running, which for a personal
+  about it — once no pre-077 database is left running, which for a personal
   fork means once the lab instances have all been through one repaired
   startup.
 - **Redundancy check:** Upstream cannot carry this; the state it repairs only
@@ -779,17 +867,23 @@ When you rebase, work through every entry below. For each one:
   `tests/spec/images.spec.ts`
 - **What:** The nginx E2E test image comes from `mirror.gcr.io` (Google's
   anonymous Docker Hub pull-through cache) instead of `public.ecr.aws`, every
-  prefetch pull (including the `ghcr.io` radarr image, which stays on ghcr,
-  and — since the `c8ad3ed` rebase — upstream's `quay.io/minio/minio` and
-  `ghcr.io/rustic-rs/rustic` images for the S3-backup E2E, kept on their
-  upstream registries and mirrored into the `.depot` workflow upstream left
-  bare)
+  prefetch pull (including upstream's `public.ecr.aws/docker/library/busybox`
+  — added by upstream's `081c9ac` ECR switch for the update-check specs —
+  and `quay.io/minio/minio` / `ghcr.io/rustic-rs/rustic` for the S3-backup
+  E2E, all kept on their upstream registries and mirrored into the `.depot`
+  workflow upstream left bare)
   retries a failed pull three times with linear backoff, and the dead
   `docker save … > /tmp/test-images.tar` was dropped — nothing has ever read
-  that tarball; the pull alone is what seeds the runner's image store. The
+  that tarball (upstream's `081c9ac` extended it with busybox, still unread);
+  the pull alone is what seeds the runner's image store. The
   nginx image name is referenced in three places besides the workflow, so all
   of them
   move together or the prefetch stops matching what the fixtures ask for.
+  The radarr prefetch was dropped at the `96729f7` rebase — upstream's
+  `081c9ac` removed the image from the tests entirely. The new update-check
+  specs (`image-updates.spec.ts`, `updates.spec.ts`) reference ECR image
+  names for registry-metadata queries without pulling most of them; those
+  names are upstream's choice of what to exercise and are left alone.
 - **Why:** `public.ecr.aws` rate-limits anonymous pulls per source IP, and the
   three E2E matrix jobs pull the same image simultaneously from one runner, so
   `toomanyrequests: Rate exceeded` failed E2E jobs repeatedly before any test
@@ -802,7 +896,9 @@ When you rebase, work through every entry below. For each one:
   and `tecnativa/docker-socket-proxy:latest` straight from Docker Hub — the
   same class of exposure, not yet hit, and left alone.
 - **Redundancy check:** Drop if upstream moves these pulls off `public.ecr.aws`
-  itself.
+  itself. (Upstream's `081c9ac` moved nginx *within* ECR, from
+  `docker/library/nginx` to the `nginx/nginx` gallery namespace — still
+  `public.ecr.aws`, still the same anonymous per-IP rate limits — **keep**.)
 
 ### 13. Quieter startup: stop logging non-problems
 
@@ -994,6 +1090,8 @@ When you rebase, work through every entry below. For each one:
   `backend/internal/settings/service.go`,
   `backend/internal/settings/service_test.go`,
   `backend/internal/updater/service.go`,
+  `backend/internal/imageupdate/image_update.go`,
+  `backend/internal/imageupdate/service_test.go`,
   `backend/pkg/scheduler/auto_heal_job.go`,
   `backend/pkg/scheduler/auto_heal_job_test.go`,
   `backend/internal/bootstrap/jobs_bootstrap.go`,
@@ -1034,7 +1132,12 @@ When you rebase, work through every entry below. For each one:
   (`buildContainerUpdateFilterInternal` in the updater service — applied to
   **both** used-image collection paths, direct containers and Compose-project
   containers, or "include none" is not a true no-op — and
-  `parseContainerFilterInternal` in the auto-heal job).
+  `parseContainerFilterInternal` in the auto-heal job). Since the `96729f7`
+  rebase the same applies to update *discovery*: upstream's `b9b2092` made
+  `getAllImageRefsInternal` (`internal/imageupdate`) honor the exclusion
+  list, and the fork materializes the inverse set there in include mode —
+  any new upstream consumer of `autoUpdateExcludedContainers` has to be
+  made mode-aware the same way, or include mode silently inverts for it.
   `SetContainerAutoUpdateExclusionInternal` — which backs the per-container
   auto-update toggle and the Updates-page ignore action — inverts its
   add/remove in include mode so "enable auto-update" always means "make this

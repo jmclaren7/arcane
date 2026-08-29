@@ -292,15 +292,7 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 	// backup-support DDL has to be replayed by hand; on a 074-era database 74 is
 	// recorded for the fork's migration, so Goose will skip upstream's 074 and its
 	// pull/redeploy-after-sync columns have to be replayed by hand.
-	midRenumberVersionRecorded, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvMidRenumberVersion)
-	if err != nil {
-		return err
-	}
-	lateRenumberVersionRecorded, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvLateRenumberVersion)
-	if err != nil {
-		return err
-	}
-	lastRenumberVersionRecorded, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvLastRenumberVersion)
+	midRenumberVersionRecorded, lateRenumberVersionRecorded, lastRenumberVersionRecorded, err := recordedRenumberEraVersionsInternal(ctx, db, dbProvider)
 	if err != nil {
 		return err
 	}
@@ -405,6 +397,23 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		"restoredSkippedMigration", !repositoryNamesPresent, "replayedVolumeWorkspaceRename", midRenumberVersionRecorded,
 		"replayedBackupSupport", lateRenumberVersionRecorded, "replayedPullRedeploy", lastRenumberVersionRecorded)
 	return nil
+}
+
+// recordedRenumberEraVersionsInternal reports which of the fork migration's old
+// version numbers (71, 73, 74) are recorded as applied — for each, the signature
+// of the corresponding renumber era whose skipped upstream migration the repair
+// has to replay by hand.
+func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProvider string) (mid, late, last bool, err error) {
+	if mid, err = gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvMidRenumberVersion); err != nil {
+		return false, false, false, err
+	}
+	if late, err = gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvLateRenumberVersion); err != nil {
+		return false, false, false, err
+	}
+	if last, err = gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, forkCommitEnvLastRenumberVersion); err != nil {
+		return false, false, false, err
+	}
+	return mid, late, last, nil
 }
 
 // missingBackupSupportColumnsInternal lists the volume_backups columns from the

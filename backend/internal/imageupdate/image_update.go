@@ -722,8 +722,24 @@ func (s *ImageUpdateService) getAllImageRefsInternal(ctx context.Context, limit 
 
 	excludedContainers := make(map[string]bool)
 	if s.settingsService != nil {
+		listed := make(map[string]bool)
 		for _, name := range settings.ParseExcludedContainerNames(s.settingsService.GetStringSetting(ctx, "autoUpdateExcludedContainers", "")) {
-			excludedContainers[name] = true
+			listed[name] = true
+		}
+		if s.settingsService.GetBoolSetting(ctx, "autoUpdateIncludeMode", false) {
+			// In include mode the configured names are an allowlist: every
+			// container not on it is excluded from update discovery, so
+			// materialize the inverse from the container list already fetched
+			// above (mirroring UpdaterService.ExcludedContainers).
+			for _, summary := range containerList.Items {
+				for _, rawName := range summary.Names {
+					if name := strings.TrimPrefix(rawName, "/"); name != "" && !listed[name] {
+						excludedContainers[name] = true
+					}
+				}
+			}
+		} else {
+			excludedContainers = listed
 		}
 	}
 

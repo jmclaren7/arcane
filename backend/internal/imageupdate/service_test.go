@@ -2359,6 +2359,46 @@ func TestFilterImageSummariesByContainerOptOutHonorsSettingsExclusionsInternal(t
 	assert.Contains(t, got, sharedRef)
 }
 
+func TestImageUpdateService_GetAllImageRefsInvertsExclusionsInIncludeModeInternal(t *testing.T) {
+	const (
+		includedRef = "local/included:latest"
+		otherRef    = "local/other:latest"
+	)
+
+	images := []dockertypesimage.Summary{
+		{ID: "sha256:included", RepoTags: []string{includedRef}},
+		{ID: "sha256:other", RepoTags: []string{otherRef}},
+	}
+	containers := []dockertypescontainer.Summary{
+		{ID: "c1", Names: []string{"/included-app"}, ImageID: "sha256:included", Image: includedRef},
+		{ID: "c2", Names: []string{"/other-app"}, ImageID: "sha256:other", Image: otherRef},
+	}
+
+	server := newImageUpdateDiscoveryServerInternal(t, images, containers)
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	settingsService := newImageUpdateTestSettingsServiceInternal(t, "30", "30")
+	require.NoError(t, settingsService.UpdateSetting(ctx, "autoUpdateExcludedContainers", "included-app"))
+	require.NoError(t, settingsService.SetBoolSetting(ctx, "autoUpdateIncludeMode", true))
+
+	svc := NewImageUpdateService(
+		nil,
+		settingsService,
+		nil,
+		&docker.DockerClientService{Client: newImageUpdateTestDockerClientInternal(t, server)},
+		nil,
+		nil,
+		nil,
+	)
+
+	got, err := svc.getAllImageRefsInternal(ctx, 0)
+
+	require.NoError(t, err)
+	assert.Contains(t, got, includedRef)
+	assert.NotContains(t, got, otherRef)
+}
+
 // testProjectRow is a minimal stand-in for project.Project: the project
 // package imports this one, so the in-package test cannot import it back.
 type testProjectRow struct {

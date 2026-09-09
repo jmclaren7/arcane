@@ -171,7 +171,7 @@ func (s *ProjectService) ReleaseGitOpsProjectLinks(ctx context.Context, syncID s
 	for i := range managed {
 		// The compose file was resolved through the sync's compose path; drop the
 		// parsed entry so the next load rediscovers it from the directory.
-		s.parsedCompose.invalidate(managed[i].ID)
+		s.parsedCompose.Invalidate(managed[i].ID)
 		metadata := database.JSON{"action": "gitops-detached", "projectID": managed[i].ID, "projectName": managed[i].Name, "syncID": syncID}
 		s.logProjectEventInternal(ctx, event.EventTypeProjectUpdate, managed[i].ID, managed[i].Name, user, metadata, "could not log project GitOps detach action")
 	}

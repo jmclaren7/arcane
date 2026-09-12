@@ -39,8 +39,12 @@ When you rebase, work through every entry below. For each one:
 3. **Build and type-check the result, even when the rebase reported no
    conflicts.** Git only detects conflicts between overlapping hunks; an
    upstream change elsewhere in a file the fork also edits (an import removed, a
-   helper renamed) replays cleanly and breaks only at compile time. This has
-   already happened once — see the `50c3d5d` note below. The minimum gate is
+   helper renamed) replays cleanly and breaks only at compile time. This keeps
+   happening: a dropped `fmt` import at `50c3d5d`, and at `41eae633` two
+   separate frontend hunks (changes #9 and #15) still reading form state as
+   Svelte stores (`$inputs.x`) after upstream had moved it to plain runes
+   (`inputs.x`) — `git` reported a clean replay both times and only
+   `svelte-check` caught them. The minimum gate is
    `go build -tags exclude_frontend ./...` and `go vet -tags exclude_frontend
    ./...` in `backend/` (Go 1.27+; upstream dropped the `GOEXPERIMENT=jsonv2`
    env at the go 1.27 upgrade — the build tag is what lets the backend build
@@ -52,10 +56,85 @@ When you rebase, work through every entry below. For each one:
 4. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Superseded" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `88514f7` — _fix: add missing routes to edge
-> tunnel_, on 2026-09-09. _(Previously `96729f7`, 2026-08-29.)_
+> **Last rebased onto upstream:** `41eae633` — _fix: fall back to cpuset for
+> trivy when the docker host lacks CFS quota support (#3910)_, on 2026-09-12.
+> _(Previously `88514f7`, 2026-09-09.)_
 >
-> This rebase carried 126 new upstream commits — the largest crossing since
+> This rebase carried 22 new upstream commits: the 2.11.0 release, Git-managed
+> projects and synced files linked back to their repository (`6eed748e`), a
+> backups recovery-key dropdown with import and reset confirmation
+> (`16db5a33`), discovery and diagnosis of projects with an unreadable `.env`
+> (`e8c92c5e`), **two Svelte-reactivity refactors (`5df09ed4`, `2d0ac4a8`)**
+> that moved form state off store-style `$`-prefixed access, mobile-nav label
+> stacking (`de66d633`), Easy Join discovery on non-manager environments
+> (`436e20bc`), first-login password validation aligned with the configured
+> policy (`b71892d0`), clearer credential requirements when changing a
+> repository URL (`2081406e`), `JWT_SECRET` dropped from the compose examples
+> (`b5249105`), a trivy cpuset fallback (`41eae633`), and the usual dependency
+> bumps and Crowdin update. **No upstream migration was added**, so change #9
+> keeps `085` and change #10 gains no sixth era. The headline outcomes:
+>
+> 1. **Change #7 re-derived onto `toGitRouteUrl`.** Upstream's `6eed748e`
+>    generalized `toGitCommitUrl(url, hash)` into
+>    `toGitRouteUrl(url, route, ref, path)` so it can also build `tree` and
+>    `edit` links. Both of the fork's commit-hash display sites (the sync
+>    table's `CommitCell` and the project header) now derive `commitUrl` from
+>    upstream's helper and keep the fork's `shortCommit` + `title={fullCommit}`
+>    treatment on top; `shortenGitCommit` / `SHORT_GIT_COMMIT_LENGTH` merged
+>    cleanly and now sit after `toGitRouteUrl` in `navigation.ts`. The new
+>    `gitops.ts` helpers (`gitOpsProjectUrl`, `gitOpsComposeEditUrl`,
+>    `gitOpsFileEditUrl`) and `code-panel.svelte` render no commit hash, so
+>    there is no third display site to extend.
+> 2. **Change #14's button re-placed beside upstream's new repository link.**
+>    `6eed748e` added an "Open project in repository" button to the same
+>    read-only Git banner the fork's "Convert to regular project" button lives
+>    in, and dropped the `shrink-0` classes in favour of a `flex-wrap`
+>    container. The detach button was re-applied as the last of the three,
+>    without `shrink-0`, and `EditIcon` was merged into upstream's icon import
+>    alongside its new `ExternalLinkIcon`.
+> 3. **Two fork hunks replayed cleanly but were left broken by the reactivity
+>    refactors — exactly the failure mode step 3 above exists for.**
+>    `5df09ed4`/`2d0ac4a8` moved `createForm`'s `inputs` off Svelte stores, so
+>    every `$inputs.x` / `$formInputs.x` in upstream's own markup became
+>    `inputs.x` / `formInputs.x`. The fork's `injectCommitEnv` switch (change
+>    #9, `gitops-sync-dialog.svelte`) and its six include-mode reads (change
+>    #15, `JobsTab.svelte`) still used the `$` form and merged without a
+>    conflict; both were rewritten to the plain form. Nothing in the git
+>    output flagged this — only `svelte-check` did.
+> 4. **Change #9's dialog hunk re-derived onto the rewritten `formData`.**
+>    Upstream replaced the dialog's flat `$derived({...})` literal (with its
+>    `open && syncToEdit ? … : …` ternary per field) with a `$derived.by`
+>    that untracks after the first settings response so later refreshes
+>    preserve edits. `injectCommitEnv` was re-applied as one
+>    `syncToEdit?.injectCommitEnv ?? false` entry inside upstream's returned
+>    object rather than force-keeping the fork's copy of the old literal.
+> 5. **Change #11 re-verified against the new tests.** Re-grepping `tests/`
+>    for `nginx:stable-alpine` finds the same five fork-owned references plus
+>    upstream's registry-metadata-only `image-updates.spec.ts`, which is left
+>    at its ECR name; upstream touched `images.spec.ts` elsewhere in this
+>    batch without disturbing the fork's `mirror.gcr.io/library/alpine` pull.
+>    Neither `ci.yml` nor `.depot/workflows/ci.yml` changed upstream, so
+>    change #4 needed no re-derivation this time.
+>
+> Every other active entry replayed with zero conflicts, and each entry's
+> redundancy check was re-verified against `41eae633`.
+>
+> Verified post-rebase: `go build -tags exclude_frontend ./...` and `go vet
+> -tags exclude_frontend ./...` clean over the whole backend; `go test ./...`
+> green across `backend`, `types` and `cli` except the two known
+> Docker-daemon-dependent `internal/project` tests
+> (`TestProjectService_UpdateProject_AllowsRenameAfterJournalRecoveryDockerUnavailable`
+> and `TestProjectService_ListProjects_WithDerivedStatusFilter_AllowsAllPageSizeSentinel`),
+> which fail identically on pristine `upstream/main` in the same container, so
+> they are environmental, not fork regressions; `svelte-check` over
+> `frontend/` reporting **0 errors / 0 warnings** across 674 files; and `vp fmt
+> --check` clean over `frontend/src` and `tests` after re-sorting one Tailwind
+> class list in the fork's sync-table spinner. Of the 22 commits, none
+> superseded an active fork change; all 15 active changes remain necessary.
+>
+> Earlier rebase (`88514f7` — _fix: add missing routes to edge tunnel_,
+> 2026-09-09; previously `96729f7`, 2026-08-29): carried 126 new upstream
+> commits — the largest crossing since
 > the `1cea5f48` domain reorg: the 2.10.0/2.10.1/2.10.2 releases, Apple push
 > notifications (`4b1abefe`) — which claimed migration number **077** — and
 > then `078`–`084` in quick succession (a normalized CVE table `31a9896d`,
@@ -786,7 +865,8 @@ When you rebase, work through every entry below. For each one:
   `frontend/src/routes/(app)/environments/[id]/gitops/sync-table.svelte`,
   `frontend/src/routes/(app)/projects/[projectId]/+page.svelte`
 - **What:** Add a `shortenGitCommit` helper (and `SHORT_GIT_COMMIT_LENGTH = 7`)
-  beside `toGitCommitUrl`. Everywhere a GitOps commit hash is shown — the sync
+  beside the repository-URL helpers (`toGitCommitUrl` until upstream's
+  `6eed748e` generalized it into `toGitRouteUrl`). Everywhere a GitOps commit hash is shown — the sync
   table `CommitCell` and the project header — render the abbreviated hash with
   the full hash in a `title` tooltip. The commit link's `href` still uses the
   full hash so it resolves. _(A third display site, the project page's
@@ -795,14 +875,19 @@ When you rebase, work through every entry below. For each one:
   it.)_
 - **Why:** Full 40-character hashes are noisy in the UI; the short form reads
   better while the full value stays available on hover and in the link.
-- **Re-apply notes:** The helper is appended to `navigation.ts` after
-  `toGitCommitUrl`. Each display site derives `{@const shortCommit = ...}`,
+- **Re-apply notes:** The helper is appended to `navigation.ts` after the
+  repository-URL helpers. Each display site derives `{@const shortCommit = ...}`,
   renders `shortCommit`, and adds `title={fullCommit}` (the sync table) or
   `title={project.lastSyncCommit}` (the project page). Keep every commit-link
-  `href` on the full hash. Shares `sync-table.svelte` with change #5 — apply
+  `href` on the full hash, and take the URL from whatever helper upstream
+  currently exposes — `toGitCommitUrl(url, hash)` became
+  `toGitRouteUrl(url, 'commit', hash)` at the `41eae633` rebase, and the fork
+  follows the rename rather than keeping a commit-only helper alive. Shares
+  `sync-table.svelte` with change #5 — apply
   both when re-doing that file. Do **not** re-add the git-managed-alert site
   upstream removed; apply the treatment only where upstream itself renders a
-  commit hash.
+  commit hash — `toGitRouteUrl`'s `tree`/`edit` callers (`gitops.ts`,
+  `code-panel.svelte`) render paths, not hashes, and are left alone.
 - **Redundancy check:** Upstream renders the raw full hash with no short form or
   `title` — **keep**.
 
@@ -893,6 +978,15 @@ When you rebase, work through every entry below. For each one:
   the keys on the next sync unless the repository ships no `.env` of its own —
   there nothing replaces the Git-sourced env, so the last injected values stay in
   the project's `.env` until removed by hand.
+  The dialog half is one field in `formData` plus one `Switch` block. Upstream
+  keeps rewriting how that form is built — at the `41eae633` rebase
+  `5df09ed4`/`2d0ac4a8` replaced the flat `$derived({...})` literal with a
+  `$derived.by` that untracks after the first settings response, and moved
+  `inputs` off Svelte stores so `$inputs.x` became `inputs.x` — so re-apply
+  by adding the field to whatever object upstream currently returns and by
+  copying a neighbouring switch's binding style verbatim, never by keeping
+  the fork's copy of the surrounding form. A stale `$`-prefixed read merges
+  without a conflict and only `svelte-check` catches it.
 - **Redundancy check:** Upstream has no commit-injection option; its GitOps sync
   writes only the repository's own env content — **keep**.
 
@@ -996,10 +1090,19 @@ When you rebase, work through every entry below. For each one:
   `docker save … > /tmp/test-images.tar` was dropped — nothing has ever read
   that tarball (upstream's `081c9ac` extended it with busybox, still unread);
   the pull alone is what seeds the runner's image store. The
-  nginx image name is referenced in five places besides the workflow, so all
-  of them
+  nginx image name is referenced in four places besides the workflow
+  (`tests/setup/project.data.ts`,
+  `tests/setup/projects/test-project-static/compose.yaml`,
+  `tests/setup/gitops-test-repo/compose.yaml`, `tests/spec/project.spec.ts`),
+  so all of them
   move together or the prefetch stops matching what the fixtures ask for.
-  Two of those five arrived at the `88514f7` rebase: upstream's `4a2f9ff4`
+  The fifth fork-touched test file, `tests/spec/images.spec.ts`, is a
+  different image: its "Pull Image" dialog spec types an image reference by
+  hand and pulls it live, so its `public.ecr.aws/docker/library/alpine` was
+  moved to `mirror.gcr.io/library/alpine` for the same reason. (Re-check that
+  hunk whenever upstream edits the file — `41eae633` did, elsewhere in the
+  same spec, without disturbing it.)
+  Two of the four nginx sites arrived at the `88514f7` rebase: upstream's `4a2f9ff4`
   E2E expansion added `tests/setup/projects/test-project-static/compose.yaml`
   and `tests/setup/gitops-test-repo/compose.yaml`, both pulling nginx from
   ECR at test time, and both were moved onto the mirrored name.
@@ -1196,7 +1299,12 @@ When you rebase, work through every entry below. For each one:
   and it mirrors `DeleteSync`, which is likewise deletable when its row cannot
   be loaded. New project or sync routes also need a `commandRoutes` entry in
   `backend/pkg/libarcane/edge/commands.go` or edge-tunnel environments cannot
-  reach them. No migration: the orphan reconcile is idempotent code on the
+  reach them. The button belongs in whatever action row upstream's read-only
+  Git banner currently renders, and takes that row's own conventions: at the
+  `41eae633` rebase `6eed748e` added its own "Open project in repository" link
+  there and dropped the row's `shrink-0` classes in favour of a `flex-wrap`
+  container, so the detach button was re-applied as the last of the three
+  without `shrink-0`. No migration: the orphan reconcile is idempotent code on the
   project filesystem sync, which keeps this out of the fork's
   migration-renumbering debt. Upstreamable as a feature plus a recovery path
   for pre-2.8.0 databases. Verify with `go test ./internal/gitops/ -run
@@ -1281,6 +1389,12 @@ When you rebase, work through every entry below. For each one:
   `types/settings/settings.go`, `overrideDocRules` and
   `expectedSettingOverrideKeys` in the config schema (+test), and — for
   auto-heal — the reschedule subscription key list in `jobs_bootstrap.go`.
+  The Jobs-tab half reads `formInputs` in six places; copy the surrounding
+  markup's access style rather than the fork's, because upstream keeps
+  changing it — `5df09ed4`/`2d0ac4a8` moved the form off Svelte stores at the
+  `41eae633` rebase, so the fork's `$formInputs.autoUpdateIncludeMode.value`
+  reads replayed without a conflict and had to be rewritten to
+  `formInputs.autoUpdateIncludeMode.value`; `svelte-check` is what catches it.
   Upstreamable as a self-contained feature. Verify with `go test
   ./internal/settings/... ./internal/updater/... ./pkg/scheduler/...
   ./internal/config/...` and `pnpm -C frontend check`.

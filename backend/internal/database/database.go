@@ -238,7 +238,7 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 	return nil
 }
 
-// This fork's GitOps commit-injection migration has shipped under five version
+// This fork's GitOps commit-injection migration has shipped under six version
 // numbers that upstream later claimed for its own migrations:
 //
 //   - Fork commits f3b8e1e..130b45f (2026-08-01..2026-08-03) shipped it as 069.
@@ -256,6 +256,10 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 //   - Fork builds between the 2026-08-29 and 2026-09-09 rebases shipped it as
 //     077. Upstream then claimed 077 (Apple push notification devices/outbox)
 //     through 084, so the fork migration was renumbered a fifth time, to 085.
+//   - Fork builds between the 2026-09-09 and 2026-09-19 rebases shipped it as
+//     085. Upstream then claimed 085 (GitOps backup mode), 086 (git repository
+//     commit identity) and 087 (volume backup remote instance), so the fork
+//     migration was renumbered a sixth time, to 088.
 //
 // Goose keys its bookkeeping on the version number alone, so a database migrated
 // by a build from any of those windows is wrong in two ways: the upstream
@@ -264,7 +268,7 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 // fork migration under its new number aborts with "duplicate column name:
 // inject_commit_env" and Arcane refuses to start.
 //
-// repairPreRenumberForkMigrationInternal detects all four states and repairs them
+// repairPreRenumberForkMigrationInternal detects all of those states and repairs them
 // in place, without touching the operator's data: it applies everything below the
 // fork migration's current number through Goose, replays the upstream migration(s)
 // the stale bookkeeping made Goose skip, and records the fork migration as applied
@@ -272,14 +276,15 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 // which is harmless: a second instance re-runs the same checks and finds nothing to
 // do, and the worst a genuine race can leave behind is a duplicate version row,
 // which Goose collapses when it reads its state. It can be deleted once no database
-// migrated by a pre-085 fork build is left in the wild.
+// migrated by a pre-088 fork build is left in the wild.
 const (
-	forkCommitEnvMigrationVersion    int64 = 85
-	forkCommitEnvApnsRenumberVersion int64 = 77
-	forkCommitEnvLastRenumberVersion int64 = 74
-	forkCommitEnvLateRenumberVersion int64 = 73
-	forkCommitEnvMidRenumberVersion  int64 = 71
-	forkCommitEnvPreRenumberVersion  int64 = 69
+	forkCommitEnvMigrationVersion          int64 = 88
+	forkCommitEnvBackupModeRenumberVersion int64 = 85
+	forkCommitEnvApnsRenumberVersion       int64 = 77
+	forkCommitEnvLastRenumberVersion       int64 = 74
+	forkCommitEnvLateRenumberVersion       int64 = 73
+	forkCommitEnvMidRenumberVersion        int64 = 71
+	forkCommitEnvPreRenumberVersion        int64 = 69
 )
 
 // forkCommitEnvRenumberErasInternal records which of the fork migration's old
@@ -287,10 +292,11 @@ const (
 // will skip the upstream migration that now owns that number, so the repair has
 // to replay it by hand.
 type forkCommitEnvRenumberErasInternal struct {
-	mid  bool // 71 — upstream's volume-workspace legacy key renames
-	late bool // 73 — upstream's S3/system backup support
-	last bool // 74 — upstream's GitOps pull/redeploy-after-sync flags
-	apns bool // 77 — upstream's Apple push notification tables
+	mid        bool // 71 — upstream's volume-workspace legacy key renames
+	late       bool // 73 — upstream's S3/system backup support
+	last       bool // 74 — upstream's GitOps pull/redeploy-after-sync flags
+	apns       bool // 77 — upstream's Apple push notification tables
+	backupMode bool // 85 — upstream's GitOps backup mode
 }
 
 func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbProvider string, provider *goose.Provider, currentVersion, requiredVersion int64) error {
@@ -303,9 +309,9 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		return err
 	}
 
-	// Decide *before* the UpTo below which of versions 71, 73, 74 and 77 are
+	// Decide *before* the UpTo below which of versions 71, 73, 74, 77 and 85 are
 	// already recorded: on a 069-era database none is, and the UpTo applies
-	// upstream's real 071, 073, 074 and 077 itself (recording them); on any later
+	// upstream's real 071, 073, 074, 077 and 085 itself (recording them); on any later
 	// era the recorded number belongs to the fork's own migration, so Goose skips
 	// the upstream migration that now owns it and its statements have to be
 	// replayed by hand.
@@ -359,7 +365,7 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		return err
 	}
 
-	// The column 085 adds is already present, so record it as applied rather than
+	// The column 088 adds is already present, so record it as applied rather than
 	// re-running its DDL, which would fail on the duplicate column.
 	if err := insertGooseMigrationVersionInternal(ctx, tx, dbProvider, forkCommitEnvMigrationVersion); err != nil {
 		return err
@@ -372,12 +378,13 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 	slog.Info("Repaired pre-renumber fork migration state",
 		"provider", dbProvider, "forkMigrationVersion", forkCommitEnvMigrationVersion,
 		"restoredSkippedMigration", !repositoryNamesPresent, "replayedVolumeWorkspaceRename", eras.mid,
-		"replayedBackupSupport", eras.late, "replayedPullRedeploy", eras.last, "replayedApns", eras.apns)
+		"replayedBackupSupport", eras.late, "replayedPullRedeploy", eras.last, "replayedApns", eras.apns,
+		"replayedGitOpsBackupMode", eras.backupMode)
 	return nil
 }
 
 // recordedRenumberEraVersionsInternal reports which of the fork migration's old
-// version numbers (71, 73, 74, 77) are recorded as applied — for each, the
+// version numbers (71, 73, 74, 77, 85) are recorded as applied — for each, the
 // signature of the corresponding renumber era whose skipped upstream migration
 // the repair has to replay by hand.
 func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProvider string) (forkCommitEnvRenumberErasInternal, error) {
@@ -390,6 +397,7 @@ func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProv
 		{forkCommitEnvLateRenumberVersion, &eras.late},
 		{forkCommitEnvLastRenumberVersion, &eras.last},
 		{forkCommitEnvApnsRenumberVersion, &eras.apns},
+		{forkCommitEnvBackupModeRenumberVersion, &eras.backupMode},
 	} {
 		applied, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, era.version)
 		if err != nil {
@@ -405,6 +413,7 @@ func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProv
 type forkCommitEnvReplayColumnsInternal struct {
 	backupSupport []string
 	pullRedeploy  []string
+	backupMode    []string
 }
 
 // missingReplayColumnsInternal probes the columns each recorded era's replay would
@@ -419,6 +428,11 @@ func missingReplayColumnsInternal(ctx context.Context, db *sql.DB, dbProvider st
 	}
 	if eras.last {
 		if missing.pullRedeploy, err = missingPullRedeployColumnsInternal(ctx, db, dbProvider); err != nil {
+			return forkCommitEnvReplayColumnsInternal{}, err
+		}
+	}
+	if eras.backupMode {
+		if missing.backupMode, err = missingBackupModeColumnsInternal(ctx, db, dbProvider); err != nil {
 			return forkCommitEnvReplayColumnsInternal{}, err
 		}
 	}
@@ -452,6 +466,12 @@ func replaySkippedUpstreamMigrationsInternal(ctx context.Context, execer sqlExec
 	// 077: Apple push notification devices and outbox.
 	if eras.apns {
 		if err := replaySkippedApnsInternal(ctx, execer, dbProvider); err != nil {
+			return err
+		}
+	}
+	// 085: GitOps backup mode.
+	if eras.backupMode {
+		if err := replaySkippedBackupModeInternal(ctx, execer, dbProvider, missing.backupMode); err != nil {
 			return err
 		}
 	}
@@ -830,6 +850,83 @@ func replaySkippedPullRedeployInternal(ctx context.Context, execer sqlExecerInte
 		if _, err := execer.ExecContext(ctx, query); err != nil {
 			return errors.WrapIff(err, "failed to replay skipped GitOps pull/redeploy-after-sync migration for %s", dbProvider)
 		}
+	}
+	return nil
+}
+
+// backupModeGitOpsSyncColumnsInternal lists the columns
+// 085_add_gitops_backup_mode.sql adds to gitops_syncs. Only the two timestamp
+// columns differ between dialects.
+var backupModeGitOpsSyncColumnsInternal = []struct {
+	name       string
+	definition string
+	timestamp  bool
+}{
+	{name: "mode", definition: `TEXT NOT NULL DEFAULT 'deploy'`},
+	{name: "backup_directory", definition: `TEXT NOT NULL DEFAULT ''`},
+	{name: "backup_paths", definition: `TEXT`},
+	{name: "backup_on_save", definition: `BOOLEAN NOT NULL DEFAULT true`},
+	{name: "backup_pending", definition: `BOOLEAN NOT NULL DEFAULT false`},
+	{name: "backup_pending_since", timestamp: true},
+	{name: "backup_conflict", definition: `BOOLEAN NOT NULL DEFAULT false`},
+	{name: "backup_failure_reason", definition: `TEXT`},
+	{name: "last_backup_at", timestamp: true},
+	{name: "last_backup_snapshot", definition: `TEXT`},
+}
+
+// missingBackupModeColumnsInternal lists the gitops_syncs columns from the
+// GitOps backup-mode migration that the database does not have yet.
+func missingBackupModeColumnsInternal(ctx context.Context, db *sql.DB, dbProvider string) ([]string, error) {
+	var missing []string
+	for _, column := range backupModeGitOpsSyncColumnsInternal {
+		present, err := columnExistsInternal(ctx, db, dbProvider, "gitops_syncs", column.name)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			missing = append(missing, column.name)
+		}
+	}
+	return missing, nil
+}
+
+// replaySkippedBackupModeInternal replays the Up statements of
+// 085_add_gitops_backup_mode.sql, which Goose skipped because an 085-era fork
+// build had already recorded version 85 for its own migration. The ALTERs are
+// filtered to missingColumns (computed by the caller — SQLite's ALTER TABLE has
+// no IF NOT EXISTS) and the partial unique index gains an IF NOT EXISTS guard,
+// so replaying on a database that already carries part or all of the schema is a
+// no-op.
+func replaySkippedBackupModeInternal(ctx context.Context, execer sqlExecerInternal, dbProvider string, missingColumns []string) error {
+	var timestampType string
+	switch dbProvider {
+	case dbProviderSQLite:
+		timestampType = "DATETIME"
+	case dbProviderPostgres:
+		timestampType = "TIMESTAMPTZ"
+	default:
+		return errors.Errorf("unsupported database provider: %s", dbProvider)
+	}
+
+	for _, column := range backupModeGitOpsSyncColumnsInternal {
+		if !slices.Contains(missingColumns, column.name) {
+			continue
+		}
+		definition := column.definition
+		if column.timestamp {
+			definition = timestampType
+		}
+		query := fmt.Sprintf(`ALTER TABLE gitops_syncs ADD COLUMN "%s" %s`, column.name, definition)
+		if _, err := execer.ExecContext(ctx, query); err != nil {
+			return errors.WrapIff(err, "failed to replay skipped GitOps backup-mode migration for %s", dbProvider)
+		}
+	}
+
+	// The migration writes this without IF NOT EXISTS; the replay adds the guard
+	// so a crashed earlier repair can re-run it.
+	index := `CREATE UNIQUE INDEX IF NOT EXISTS idx_gitops_syncs_backup_project ON gitops_syncs(project_id) WHERE mode = 'backup'`
+	if _, err := execer.ExecContext(ctx, index); err != nil {
+		return errors.WrapIff(err, "failed to replay skipped GitOps backup-mode index for %s", dbProvider)
 	}
 	return nil
 }

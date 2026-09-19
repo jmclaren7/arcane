@@ -13,6 +13,7 @@ import (
 	"github.com/getarcaneapp/arcane/backend/v2/internal/docker"
 	"github.com/getarcaneapp/arcane/backend/v2/internal/registry"
 	"github.com/getarcaneapp/arcane/backend/v2/internal/settings"
+	dockerutil "github.com/getarcaneapp/arcane/backend/v2/pkg/dockerutil"
 	"github.com/getarcaneapp/arcane/backend/v2/pkg/libarcane/timeouts"
 	"github.com/getarcaneapp/arcane/backend/v2/pkg/utils"
 	"github.com/getarcaneapp/arcane/backend/v2/pkg/utils/imageref"
@@ -295,11 +296,41 @@ func (r tagRegistryInternal) DockerClient(ctx context.Context) (*client.Client, 
 	return r.docker.GetClient(ctx)
 }
 
+// ExcludedContainers feeds the updater engine's exclusion port. The engine only
+// understands an exclusion list, so in include mode — where the configured names
+// are the only containers allowed to update — the inverse set is materialized
+// from the Docker container list, mirroring UpdaterService.ExcludedContainers.
 func (r tagRegistryInternal) ExcludedContainers(ctx context.Context) ([]string, error) {
 	if r.settings == nil {
 		return nil, nil
 	}
-	return strings.Split(r.settings.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""), ","), nil
+	listed := utils.UniqueNonEmptyStrings(strings.Split(r.settings.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""), ","))
+	if !r.settings.GetBoolSetting(ctx, "autoUpdateIncludeMode", false) {
+		return listed, nil
+	}
+
+	allowed := make(map[string]bool, len(listed))
+	for _, name := range listed {
+		allowed[name] = true
+	}
+	if r.docker == nil {
+		return nil, errors.New("docker client unavailable to resolve include-mode exclusions")
+	}
+	dcli, err := r.docker.GetClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	listResult, err := dcli.ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, errors.WrapIf(err, "list containers to resolve include-mode exclusions")
+	}
+	var excluded []string
+	for _, summary := range listResult.Items {
+		if name := dockerutil.ContainerNameFromNames(summary.Names); name != "" && !allowed[name] {
+			excluded = append(excluded, name)
+		}
+	}
+	return excluded, nil
 }
 
 func (s *ImageUpdateService) saveContainerTagResultInternal(ctx context.Context, cnt container.Summary, result *imageupdatetypes.Response) error {

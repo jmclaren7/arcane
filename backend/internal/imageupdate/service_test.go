@@ -2447,6 +2447,35 @@ func TestImageUpdateService_GetAllImageRefsInvertsExclusionsInIncludeModeInterna
 	assert.NotContains(t, got, otherRef)
 }
 
+func TestTagRegistryExcludedContainersInvertsExclusionsInIncludeModeInternal(t *testing.T) {
+	containers := []dockertypescontainer.Summary{
+		{ID: "c1", Names: []string{"/included-app"}, ImageID: "sha256:included", Image: "local/included:latest"},
+		{ID: "c2", Names: []string{"/other-app"}, ImageID: "sha256:other", Image: "local/other:latest"},
+	}
+
+	server := newImageUpdateDiscoveryServerInternal(t, nil, containers)
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	settingsService := newImageUpdateTestSettingsServiceInternal(t, "30", "30")
+	require.NoError(t, settingsService.UpdateSetting(ctx, "autoUpdateExcludedContainers", "included-app"))
+	dockerService := &docker.DockerClientService{Client: newImageUpdateTestDockerClientInternal(t, server)}
+
+	adapter := newTagRegistryInternal(nil, nil, dockerService, settingsService)
+
+	// Exclusion mode hands the engine the configured names verbatim.
+	excluded, err := adapter.ExcludedContainers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"included-app"}, excluded)
+
+	// Include mode inverts: the engine only understands exclusions, so every
+	// container not on the allowlist has to be materialized.
+	require.NoError(t, settingsService.SetBoolSetting(ctx, "autoUpdateIncludeMode", true))
+	excluded, err = adapter.ExcludedContainers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"other-app"}, excluded)
+}
+
 // testProjectRow is a minimal stand-in for project.Project: the project
 // package imports this one, so the in-package test cannot import it back.
 type testProjectRow struct {

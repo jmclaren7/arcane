@@ -271,6 +271,10 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 //     085. Upstream then claimed 085 (GitOps backup mode), 086 (git repository
 //     commit identity) and 087 (volume backup remote instance), so the fork
 //     migration was renumbered a sixth time, to 088.
+//   - Fork builds between the 2026-09-19 and 2026-09-26 rebases shipped it as
+//     088. Upstream then claimed 088 (vulnerability risk scoring) and 089
+//     (vulnerability scoring version), so the fork migration was renumbered a
+//     seventh time, to 090.
 //
 // Goose keys its bookkeeping on the version number alone, so a database migrated
 // by a build from any of those windows is wrong in two ways: the upstream
@@ -287,9 +291,10 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 // which is harmless: a second instance re-runs the same checks and finds nothing to
 // do, and the worst a genuine race can leave behind is a duplicate version row,
 // which Goose collapses when it reads its state. It can be deleted once no database
-// migrated by a pre-088 fork build is left in the wild.
+// migrated by a pre-090 fork build is left in the wild.
 const (
-	forkCommitEnvMigrationVersion          int64 = 88
+	forkCommitEnvMigrationVersion          int64 = 90
+	forkCommitEnvRiskRenumberVersion       int64 = 88
 	forkCommitEnvBackupModeRenumberVersion int64 = 85
 	forkCommitEnvApnsRenumberVersion       int64 = 77
 	forkCommitEnvLastRenumberVersion       int64 = 74
@@ -308,6 +313,7 @@ type forkCommitEnvRenumberErasInternal struct {
 	last       bool // 74 — upstream's GitOps pull/redeploy-after-sync flags
 	apns       bool // 77 — upstream's Apple push notification tables
 	backupMode bool // 85 — upstream's GitOps backup mode
+	risk       bool // 88 — upstream's vulnerability risk scoring tables
 }
 
 func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbProvider string, provider *goose.Provider, currentVersion, requiredVersion int64) error {
@@ -320,10 +326,10 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		return err
 	}
 
-	// Decide *before* the UpTo below which of versions 71, 73, 74, 77 and 85 are
-	// already recorded: on a 069-era database none is, and the UpTo applies
-	// upstream's real 071, 073, 074, 077 and 085 itself (recording them); on any later
-	// era the recorded number belongs to the fork's own migration, so Goose skips
+	// Decide *before* the UpTo below which of versions 71, 73, 74, 77, 85 and 88
+	// are already recorded: on a 069-era database none is, and the UpTo applies
+	// upstream's real 071, 073, 074, 077, 085 and 088 itself (recording them); on any
+	// later era the recorded number belongs to the fork's own migration, so Goose skips
 	// the upstream migration that now owns it and its statements have to be
 	// replayed by hand.
 	eras, err := recordedRenumberEraVersionsInternal(ctx, db, dbProvider)
@@ -333,6 +339,10 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 
 	slog.Warn("Detected a database migrated by a pre-renumber fork build; repairing migration state",
 		"provider", dbProvider, "currentVersion", currentVersion, "forkMigrationVersion", forkCommitEnvMigrationVersion)
+
+	if err := replaySkippedVulnerabilityRiskBeforeUpToInternal(ctx, db, dbProvider, eras); err != nil {
+		return err
+	}
 
 	// Everything below the fork migration has to be applied first: recording version
 	// 73 below raises the Goose version past the intermediate migrations, after
@@ -390,12 +400,12 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		"provider", dbProvider, "forkMigrationVersion", forkCommitEnvMigrationVersion,
 		"restoredSkippedMigration", !repositoryNamesPresent, "replayedVolumeWorkspaceRename", eras.mid,
 		"replayedBackupSupport", eras.late, "replayedPullRedeploy", eras.last, "replayedApns", eras.apns,
-		"replayedGitOpsBackupMode", eras.backupMode)
+		"replayedGitOpsBackupMode", eras.backupMode, "replayedVulnerabilityRisk", eras.risk)
 	return nil
 }
 
 // recordedRenumberEraVersionsInternal reports which of the fork migration's old
-// version numbers (71, 73, 74, 77, 85) are recorded as applied — for each, the
+// version numbers (71, 73, 74, 77, 85, 88) are recorded as applied — for each, the
 // signature of the corresponding renumber era whose skipped upstream migration
 // the repair has to replay by hand.
 func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProvider string) (forkCommitEnvRenumberErasInternal, error) {
@@ -409,6 +419,7 @@ func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProv
 		{forkCommitEnvLastRenumberVersion, &eras.last},
 		{forkCommitEnvApnsRenumberVersion, &eras.apns},
 		{forkCommitEnvBackupModeRenumberVersion, &eras.backupMode},
+		{forkCommitEnvRiskRenumberVersion, &eras.risk},
 	} {
 		applied, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, era.version)
 		if err != nil {
@@ -486,6 +497,9 @@ func replaySkippedUpstreamMigrationsInternal(ctx context.Context, execer sqlExec
 			return err
 		}
 	}
+	// 088 (vulnerability risk) is replayed before the Goose UpTo instead, because
+	// upstream's 089 alters the table it creates. See
+	// replaySkippedVulnerabilityRiskBeforeUpToInternal.
 	return nil
 }
 
@@ -506,7 +520,7 @@ func missingBackupSupportColumnsInternal(ctx context.Context, db *sql.DB, dbProv
 }
 
 // hasPreRenumberForkMigrationStateInternal reports whether gitops_syncs.inject_commit_env
-// exists without version 85 being recorded — the signature of a fork build that applied
+// exists without version 90 being recorded — the signature of a fork build that applied
 // that migration under one of its old version numbers.
 func hasPreRenumberForkMigrationStateInternal(ctx context.Context, db *sql.DB, dbProvider string, currentVersion int64) (bool, error) {
 	if currentVersion < forkCommitEnvPreRenumberVersion {
@@ -940,6 +954,165 @@ func replaySkippedBackupModeInternal(ctx context.Context, execer sqlExecerIntern
 		return errors.WrapIff(err, "failed to replay skipped GitOps backup-mode index for %s", dbProvider)
 	}
 	return nil
+}
+
+// vulnerabilityRiskStatementsInternal holds the table and index statements of
+// 088_add_vulnerability_risk.sql for each dialect. Every one is IF NOT EXISTS-
+// guarded exactly as the migration writes it, so only the cvss_score column needs
+// missing-object probing.
+var vulnerabilityRiskStatementsInternal = map[string][]string{
+	dbProviderSQLite: {
+		`CREATE TABLE IF NOT EXISTS vulnerability_threat_intel (
+    cve_id TEXT PRIMARY KEY,
+    known_exploited BOOLEAN NOT NULL DEFAULT false,
+    kev_date_added TEXT NOT NULL DEFAULT '',
+    kev_due_date TEXT NOT NULL DEFAULT '',
+    kev_ransomware BOOLEAN NOT NULL DEFAULT false,
+    epss_score REAL,
+    epss_percentile REAL,
+    epss_checked_at DATETIME,
+    updated_at DATETIME
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_vulnerability_threat_intel_known_exploited ON vulnerability_threat_intel(known_exploited)`,
+		`CREATE TABLE IF NOT EXISTS vulnerability_risk_snapshots (
+    snapshot_date TEXT PRIMARY KEY,
+    risk_score INTEGER NOT NULL DEFAULT 0,
+    risk_band TEXT NOT NULL DEFAULT 'none',
+    critical_count INTEGER NOT NULL DEFAULT 0,
+    high_count INTEGER NOT NULL DEFAULT 0,
+    medium_count INTEGER NOT NULL DEFAULT 0,
+    low_count INTEGER NOT NULL DEFAULT 0,
+    unknown_count INTEGER NOT NULL DEFAULT 0,
+    findings_count INTEGER NOT NULL DEFAULT 0,
+    known_exploited_count INTEGER NOT NULL DEFAULT 0,
+    overdue_known_exploited_count INTEGER NOT NULL DEFAULT 0,
+    high_epss_count INTEGER NOT NULL DEFAULT 0,
+    exposed_critical_high_count INTEGER NOT NULL DEFAULT 0,
+    fixable_count INTEGER NOT NULL DEFAULT 0,
+    images_scanned INTEGER NOT NULL DEFAULT 0,
+    images_total INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME
+)`,
+	},
+	dbProviderPostgres: {
+		`CREATE TABLE IF NOT EXISTS vulnerability_threat_intel (
+    cve_id TEXT PRIMARY KEY,
+    known_exploited BOOLEAN NOT NULL DEFAULT FALSE,
+    kev_date_added TEXT NOT NULL DEFAULT '',
+    kev_due_date TEXT NOT NULL DEFAULT '',
+    kev_ransomware BOOLEAN NOT NULL DEFAULT FALSE,
+    epss_score DOUBLE PRECISION,
+    epss_percentile DOUBLE PRECISION,
+    epss_checked_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_vulnerability_threat_intel_known_exploited ON vulnerability_threat_intel(known_exploited)`,
+		`CREATE TABLE IF NOT EXISTS vulnerability_risk_snapshots (
+    snapshot_date TEXT PRIMARY KEY,
+    risk_score INTEGER NOT NULL DEFAULT 0,
+    risk_band TEXT NOT NULL DEFAULT 'none',
+    critical_count INTEGER NOT NULL DEFAULT 0,
+    high_count INTEGER NOT NULL DEFAULT 0,
+    medium_count INTEGER NOT NULL DEFAULT 0,
+    low_count INTEGER NOT NULL DEFAULT 0,
+    unknown_count INTEGER NOT NULL DEFAULT 0,
+    findings_count INTEGER NOT NULL DEFAULT 0,
+    known_exploited_count INTEGER NOT NULL DEFAULT 0,
+    overdue_known_exploited_count INTEGER NOT NULL DEFAULT 0,
+    high_epss_count INTEGER NOT NULL DEFAULT 0,
+    exposed_critical_high_count INTEGER NOT NULL DEFAULT 0,
+    fixable_count INTEGER NOT NULL DEFAULT 0,
+    images_scanned INTEGER NOT NULL DEFAULT 0,
+    images_total INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ
+)`,
+	},
+}
+
+// replaySkippedVulnerabilityRiskBeforeUpToInternal replays upstream's
+// 088_add_vulnerability_risk.sql for an 088-era database. Unlike every other era
+// this one cannot wait for the repair transaction: upstream's 089 alters
+// vulnerability_risk_snapshots, so the UpTo that applies it would fail on the
+// missing table before the repair ever ran. It commits on its own and is
+// idempotent, so a crashed earlier attempt re-runs as a no-op.
+func replaySkippedVulnerabilityRiskBeforeUpToInternal(ctx context.Context, db *sql.DB, dbProvider string, eras forkCommitEnvRenumberErasInternal) error {
+	if !eras.risk {
+		return nil
+	}
+
+	scorePresent, err := columnExistsInternal(ctx, db, dbProvider, "vulnerability_scan_items", "cvss_score")
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.WrapIff(err, "failed to start skipped vulnerability-risk replay transaction for %s", dbProvider)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := replaySkippedVulnerabilityRiskInternal(ctx, tx, dbProvider, scorePresent); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return errors.WrapIff(err, "failed to commit skipped vulnerability-risk replay for %s", dbProvider)
+	}
+	return nil
+}
+
+// replaySkippedVulnerabilityRiskInternal replays the Up statements of
+// 088_add_vulnerability_risk.sql. The cvss_score ALTER and its backfill are
+// skipped when the column is already there (SQLite's ALTER TABLE has no IF NOT
+// EXISTS, and a column the database already carries may hold fresher scores).
+func replaySkippedVulnerabilityRiskInternal(ctx context.Context, execer sqlExecerInternal, dbProvider string, scorePresent bool) error {
+	queries, ok := vulnerabilityRiskStatementsInternal[dbProvider]
+	if !ok {
+		return errors.Errorf("unsupported database provider: %s", dbProvider)
+	}
+
+	if !scorePresent {
+		for _, query := range vulnerabilityRiskScoreStatementsInternal[dbProvider] {
+			if _, err := execer.ExecContext(ctx, query); err != nil {
+				return errors.WrapIff(err, "failed to replay skipped vulnerability cvss_score column for %s", dbProvider)
+			}
+		}
+	}
+
+	for _, query := range queries {
+		if _, err := execer.ExecContext(ctx, query); err != nil {
+			return errors.WrapIff(err, "failed to replay skipped vulnerability-risk migration for %s", dbProvider)
+		}
+	}
+	return nil
+}
+
+// vulnerabilityRiskScoreStatementsInternal holds the cvss_score ALTER and its
+// backfill from 088_add_vulnerability_risk.sql, which only run when the column is
+// still missing.
+var vulnerabilityRiskScoreStatementsInternal = map[string][]string{
+	dbProviderSQLite: {
+		`ALTER TABLE vulnerability_scan_items ADD COLUMN cvss_score REAL`,
+		`UPDATE vulnerability_scan_items
+SET cvss_score = COALESCE(
+    NULLIF(CAST(json_extract(details, '$.cvss.v3Score') AS REAL), 0),
+    NULLIF(CAST(json_extract(details, '$.cvss.v2Score') AS REAL), 0)
+)
+WHERE details IS NOT NULL AND json_valid(details)`,
+	},
+	dbProviderPostgres: {
+		`ALTER TABLE vulnerability_scan_items ADD COLUMN IF NOT EXISTS cvss_score DOUBLE PRECISION`,
+		`UPDATE vulnerability_scan_items
+SET cvss_score = COALESCE(
+    NULLIF((CAST(details AS jsonb) #>> '{cvss,v3Score}')::double precision, 0),
+    NULLIF((CAST(details AS jsonb) #>> '{cvss,v2Score}')::double precision, 0)
+)
+WHERE details IS NOT NULL AND details <> ''`,
+	},
 }
 
 // apnsTableStatementsInternal holds the Up statements of 077_add_apns.sql for

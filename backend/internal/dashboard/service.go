@@ -186,14 +186,11 @@ func (s *DashboardService) buildSnapshotInternal(ctx context.Context, options Da
 		if s.containerService != nil {
 			containerItems = s.containerService.BuildSummaries(ctx, filteredContainers, nil, currentContainerID, currentContainerErr)
 		} else {
-			var excluded map[string]bool
-			if s.settingsService != nil {
-				excluded = dockerutils.ExcludedContainerNameSet(s.settingsService.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""))
-			}
+			autoUpdate := s.settingsService.ContainerAutoUpdateFilter(ctx)
 			for _, container := range filteredContainers {
 				summary := containertypes.NewSummary(container)
 				summary.RedeployDisabled = labels.ShouldDisableArcaneServerRedeploy(summary.Labels, summary.ID, currentContainerID, currentContainerErr)
-				summary.AutoUpdateEnabled = !labels.IsUpdateDisabled(container.Labels) && !dockerutils.ContainerNameExcluded(container.Names, excluded)
+				summary.AutoUpdateEnabled = !labels.IsUpdateDisabled(container.Labels) && !autoUpdate.Excludes(container.Names)
 				containerItems = append(containerItems, summary)
 			}
 		}

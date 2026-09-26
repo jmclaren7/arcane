@@ -54,6 +54,7 @@ import (
 	"github.com/getarcaneapp/arcane/backend/v2/internal/registry"
 	"github.com/getarcaneapp/arcane/backend/v2/internal/settings"
 	"github.com/getarcaneapp/arcane/backend/v2/internal/updater/children/execution"
+	dockerutil "github.com/getarcaneapp/arcane/backend/v2/pkg/dockerutil"
 	activitylib "github.com/getarcaneapp/arcane/backend/v2/pkg/libarcane/activity"
 	"github.com/getarcaneapp/arcane/backend/v2/pkg/projects"
 	"github.com/getarcaneapp/arcane/backend/v2/pkg/scheduler/jobcontext"
@@ -1691,17 +1692,17 @@ func TestUpdaterService_CollectComposeImagesHonorsContainerFilterInternal(t *tes
 
 	out := map[string]struct{}{}
 	svc.collectUsedImagesFromComposeContainersInternal(context.Background(), composeContainers, active,
-		containerUpdateFilterInternal{names: map[string]bool{"cache": true}}, out)
+		dockerutil.NewContainerAutoUpdateFilter("cache", false), out)
 	require.Len(t, out, 1)
 
 	out = map[string]struct{}{}
 	svc.collectUsedImagesFromComposeContainersInternal(context.Background(), composeContainers, active,
-		containerUpdateFilterInternal{names: map[string]bool{"web": true}, includeMode: true}, out)
+		dockerutil.NewContainerAutoUpdateFilter("web", true), out)
 	require.Len(t, out, 1)
 
 	// Include mode with an empty list collects nothing.
 	out = map[string]struct{}{}
 	svc.collectUsedImagesFromComposeContainersInternal(context.Background(), composeContainers, active,
-		containerUpdateFilterInternal{names: map[string]bool{}, includeMode: true}, out)
+		dockerutil.NewContainerAutoUpdateFilter("", true), out)
 	require.Empty(t, out)
 }

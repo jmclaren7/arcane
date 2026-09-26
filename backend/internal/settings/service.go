@@ -36,6 +36,7 @@ import (
 	"github.com/getarcaneapp/arcane/backend/v2/internal/config"
 	"github.com/getarcaneapp/arcane/backend/v2/internal/database"
 	"github.com/getarcaneapp/arcane/backend/v2/internal/search"
+	dockerutil "github.com/getarcaneapp/arcane/backend/v2/pkg/dockerutil"
 	"github.com/getarcaneapp/arcane/backend/v2/pkg/libarcane"
 	"github.com/getarcaneapp/arcane/backend/v2/pkg/projects"
 	"github.com/getarcaneapp/arcane/backend/v2/pkg/utils"
@@ -1037,6 +1038,19 @@ func (s *SettingsService) SetIntSetting(ctx context.Context, key string, value i
 
 func (s *SettingsService) SetStringSetting(ctx context.Context, key, value string) error {
 	return s.UpdateSetting(ctx, key, value)
+}
+
+// ContainerAutoUpdateFilter reads the auto-update container list together with
+// its include-mode switch, so every consumer of the list interprets the mode the
+// same way instead of reading the CSV as a denylist on its own.
+func (s *SettingsService) ContainerAutoUpdateFilter(ctx context.Context) dockerutil.ContainerAutoUpdateFilter {
+	if s == nil {
+		return dockerutil.ContainerAutoUpdateFilter{}
+	}
+	return dockerutil.NewContainerAutoUpdateFilter(
+		s.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""),
+		s.GetBoolSetting(ctx, "autoUpdateIncludeMode", false),
+	)
 }
 
 // SetContainerAutoUpdateExclusionInternal adds or removes a container name from

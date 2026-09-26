@@ -751,16 +751,9 @@ func (s *UpdaterService) ExcludedContainers(ctx context.Context) ([]string, erro
 	if s == nil {
 		return nil, nil
 	}
-	filter := s.buildContainerUpdateFilterInternal(ctx)
-	if !filter.includeMode {
-		if len(filter.names) == 0 {
-			return nil, nil
-		}
-		out := make([]string, 0, len(filter.names))
-		for name := range filter.names {
-			out = append(out, name)
-		}
-		return out, nil
+	filter := s.deps.Settings.ContainerAutoUpdateFilter(ctx)
+	if !filter.IncludeMode() {
+		return filter.ListedNames(), nil
 	}
 
 	if s.deps.Docker == nil {
@@ -776,7 +769,7 @@ func (s *UpdaterService) ExcludedContainers(ctx context.Context) ([]string, erro
 	}
 	var out []string
 	for _, summary := range listResult.Items {
-		if name := dockerutil.ContainerNameFromNames(summary.Names); name != "" && !filter.names[name] {
+		if name := dockerutil.ContainerNameFromNames(summary.Names); name != "" && !filter.Lists(name) {
 			out = append(out, name)
 		}
 	}
@@ -1406,7 +1399,7 @@ func (s *UpdaterService) collectUsedImagesFromContainersInternal(ctx context.Con
 		return nil
 	}
 
-	updateFilter := s.buildContainerUpdateFilterInternal(ctx)
+	updateFilter := s.deps.Settings.ContainerAutoUpdateFilter(ctx)
 	listResult, err := dcli.ContainerList(ctx, client.ContainerListOptions{All: false})
 	if err != nil {
 		return err
@@ -1418,7 +1411,7 @@ func (s *UpdaterService) collectUsedImagesFromContainersInternal(ctx context.Con
 			continue
 		}
 
-		if updateFilter.excludesInternal(summary.Names) {
+		if updateFilter.Excludes(summary.Names) {
 			s.loggerInternal().DebugContext(ctx, "collectUsedImagesFromContainers: skipping excluded container", "containerId", summary.ID, "names", summary.Names)
 			continue
 		}
@@ -1446,7 +1439,7 @@ func (s *UpdaterService) collectUsedImagesFromContainersInternal(ctx context.Con
 	return nil
 }
 
-func (s *UpdaterService) collectUsedImagesFromComposeContainersInternal(ctx context.Context, composeContainers []container.Summary, activeProjectNames map[string]struct{}, updateFilter containerUpdateFilterInternal, out map[string]struct{}) {
+func (s *UpdaterService) collectUsedImagesFromComposeContainersInternal(ctx context.Context, composeContainers []container.Summary, activeProjectNames map[string]struct{}, updateFilter dockerutil.ContainerAutoUpdateFilter, out map[string]struct{}) {
 	for _, summary := range composeContainers {
 		projectName := dockerutil.ComposeProjectLabel(summary.Labels)
 		if projectName == "" {
@@ -1458,7 +1451,7 @@ func (s *UpdaterService) collectUsedImagesFromComposeContainersInternal(ctx cont
 		if labels.IsUpdateDisabled(summary.Labels) {
 			continue
 		}
-		if updateFilter.excludesInternal(summary.Names) {
+		if updateFilter.Excludes(summary.Names) {
 			s.loggerInternal().DebugContext(ctx, "collectUsedImagesFromComposeContainers: skipping excluded container", "containerId", summary.ID, "names", summary.Names)
 			continue
 		}
@@ -1493,42 +1486,6 @@ func (s *UpdaterService) normalizedTagsForContainerInternal(ctx context.Context,
 	return out
 }
 
-// containerUpdateFilterInternal is the parsed auto-update container list plus
-// the mode deciding whether listed names are excluded or exclusively included.
-type containerUpdateFilterInternal struct {
-	names       map[string]bool
-	includeMode bool
-}
-
-func (f containerUpdateFilterInternal) excludesInternal(names []string) bool {
-	listed := false
-	for _, name := range names {
-		if f.names[strings.TrimPrefix(name, "/")] {
-			listed = true
-			break
-		}
-	}
-	if f.includeMode {
-		return !listed
-	}
-	return listed
-}
-
-func (s *UpdaterService) buildContainerUpdateFilterInternal(ctx context.Context) containerUpdateFilterInternal {
-	filter := containerUpdateFilterInternal{names: make(map[string]bool)}
-	if s.deps.Settings == nil {
-		return filter
-	}
-	filter.includeMode = s.deps.Settings.GetBoolSetting(ctx, "autoUpdateIncludeMode", false)
-	raw := s.deps.Settings.GetStringSetting(ctx, "autoUpdateExcludedContainers", "")
-	for part := range strings.SplitSeq(raw, ",") {
-		if name := strings.TrimSpace(part); name != "" {
-			filter.names[name] = true
-		}
-	}
-	return filter
-}
-
 func (s *UpdaterService) collectUsedImagesFromProjectsInternal(ctx context.Context, out map[string]struct{}) error {
 	if s.deps.Projects == nil {
 		return nil
@@ -1557,7 +1514,7 @@ func (s *UpdaterService) collectUsedImagesFromProjectsInternal(ctx context.Conte
 		return err
 	}
 
-	s.collectUsedImagesFromComposeContainersInternal(ctx, composeContainers, activeProjectNames, s.buildContainerUpdateFilterInternal(ctx), out)
+	s.collectUsedImagesFromComposeContainersInternal(ctx, composeContainers, activeProjectNames, s.deps.Settings.ContainerAutoUpdateFilter(ctx), out)
 	return nil
 }
 

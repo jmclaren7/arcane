@@ -838,3 +838,19 @@ func TestBrowseTree_ListsSymlinksWithoutFollowingThemOutOfTheClone(t *testing.T)
 	_, err = client.ReadFile(t.Context(), repoPath, "outside.yaml")
 	require.Error(t, err)
 }
+
+// TestCloneFallsBackToFullCloneWhenShallowUnsupported covers a remote that does
+// not advertise the shallow capability: the clone must still succeed rather than
+// leaving the repository unusable. go-git's in-process server is such a remote.
+func TestCloneFallsBackToFullCloneWhenShallowUnsupported(t *testing.T) {
+	ctx := t.Context()
+	url := newBareRepoURLInternal(t)
+	pushCommitInternal(t, url, "master", "seed", map[string]string{"compose.yaml": "services: {}\n"})
+
+	client := NewClient(t.TempDir())
+	repoPath, err := client.Clone(ctx, url, "master", noAuthInternal())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Cleanup(repoPath) })
+
+	assert.FileExists(t, filepath.Join(repoPath, "compose.yaml"))
+}

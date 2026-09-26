@@ -213,7 +213,9 @@ func (c *Client) CheckoutForWrite(ctx context.Context, url, branch string, auth 
 		return nil, err
 	}
 
-	repoPath, err := c.Clone(ctx, normalized, branch, auth)
+	// Full history: this checkout is going to commit and push, which go-git
+	// cannot do from the shallow clone Clone produces.
+	repoPath, err := c.cloneInternal(ctx, normalized, branch, auth, false)
 	if err == nil {
 		repo, openErr := git.PlainOpen(repoPath)
 		if openErr != nil {
@@ -267,7 +269,7 @@ func (c *Client) initEmptyCheckoutInternal(url, branch string) (*WriteCheckout, 
 }
 
 func (c *Client) checkoutNewBranchInternal(ctx context.Context, url, branch string, auth AuthConfig) (*WriteCheckout, error) {
-	repoPath, err := c.Clone(ctx, url, "", auth)
+	repoPath, err := c.cloneInternal(ctx, url, "", auth, false)
 	if err != nil {
 		return nil, err
 	}

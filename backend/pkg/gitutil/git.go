@@ -299,8 +299,22 @@ func addHostKey(knownHostsPath, hostname string, key gossh.PublicKey) (err error
 	return nil
 }
 
-// Clone clones a repository to a temporary directory
+// shallowUnsupportedMessageInternal is how go-git reports a remote that does not
+// advertise the shallow capability. It is a bare fmt.Errorf with no sentinel to
+// match on, so the message is the only signal available.
+const shallowUnsupportedMessageInternal = "unsupported capability: shallow"
+
+// Clone clones a repository to a temporary directory. GitOps reads only ever need
+// the working tree at the branch tip, so the clone is shallow and tag-less: full
+// history was the dominant cost of every sync, browse and build-context clone and
+// grew with repository age. Callers that go on to commit and push need
+// cloneInternal with shallow=false instead — go-git cannot push from a shallow
+// clone, and the local transport rejects one outright.
 func (c *Client) Clone(ctx context.Context, url, branch string, auth AuthConfig) (string, error) {
+	return c.cloneInternal(ctx, url, branch, auth, true)
+}
+
+func (c *Client) cloneInternal(ctx context.Context, url, branch string, auth AuthConfig, shallow bool) (string, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
@@ -342,12 +356,11 @@ func (c *Client) Clone(ctx context.Context, url, branch string, auth AuthConfig)
 	cloneOptions := &git.CloneOptions{
 		URL:      url,
 		Progress: nil,
-		// GitOps only ever needs the working tree at the branch tip, never
-		// history or tags. A full-history clone was the dominant cost of every
-		// sync (and of each browse / build-context clone) and grew with repo
-		// age; a shallow, tag-less clone keeps it flat.
-		Depth: 1,
-		Tags:  git.NoTags,
+	}
+
+	if shallow {
+		cloneOptions.Depth = 1
+		cloneOptions.Tags = git.NoTags
 	}
 
 	if authMethod != nil {
@@ -362,6 +375,11 @@ func (c *Client) Clone(ctx context.Context, url, branch string, auth AuthConfig)
 	_, err = git.PlainCloneContext(ctx, tmpDir, false, cloneOptions)
 	if err != nil {
 		_ = os.RemoveAll(tmpDir)
+		if shallow && strings.Contains(err.Error(), shallowUnsupportedMessageInternal) {
+			// Not every server advertises the shallow capability. Retry in full
+			// rather than leaving such a remote unusable.
+			return c.cloneInternal(ctx, url, branch, auth, false)
+		}
 		return "", errors.WrapIf(err, "failed to clone repository")
 	}
 

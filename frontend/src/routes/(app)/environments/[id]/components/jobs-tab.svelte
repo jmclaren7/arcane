@@ -332,7 +332,7 @@
 
 			<div class="flex items-start justify-between gap-3">
 				<div class="space-y-1">
-					<Label class="text-sm font-medium">
+					<Label>
 						{formInputs.autoHealIncludeMode.value ? m.include_containers() : m.excluded_containers()}
 						{#await containersPromise then containers}
 							<span class="ml-1 font-normal text-muted-foreground">
@@ -345,8 +345,8 @@
 					</p>
 				</div>
 				<div class="flex shrink-0 items-center gap-2" title={m.container_list_include_mode_description()}>
-					<Label for="auto-heal-include-mode" class="text-xs font-normal text-muted-foreground">
-						{m.container_list_include_mode_label()}
+					<Label for="auto-heal-include-mode" class="mb-0">
+						<span class="text-xs font-normal text-muted-foreground">{m.container_list_include_mode_label()}</span>
 					</Label>
 					<Switch id="auto-heal-include-mode" bind:checked={formInputs.autoHealIncludeMode.value} />
 				</div>

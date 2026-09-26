@@ -881,7 +881,7 @@
 						<div class="flex items-start gap-3 sm:col-span-2">
 							<Switch id="injectCommitEnvSwitch" bind:checked={inputs.injectCommitEnv.value} />
 							<div class="space-y-1">
-								<Label for="injectCommitEnvSwitch" class="mb-0 text-sm leading-none font-medium">
+								<Label for="injectCommitEnvSwitch" class="mb-0">
 									{m.git_sync_inject_commit_env()}
 								</Label>
 								<p class="text-xs text-muted-foreground">{m.git_sync_inject_commit_env_description()}</p>

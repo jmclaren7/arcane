@@ -171,11 +171,8 @@ jobs:
           cache: true
           run-install: false
 
-      - name: Setup Just
-        uses: extractions/setup-just@v4
-
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Install E2E test dependencies
         run: vp -C tests install
@@ -200,11 +197,11 @@ jobs:
             return 1
           }
 
-          # Upstream prefetches the browser image from its depot registry
-          # mirror; without a depot token the fork takes the public default
+          # Upstream prefetches the browser image from its depot registry mirror,
+          # which a fork has no token for, so take the public default
           # tests/setup/docker-browser.ts falls back to.
           version="$(vp -C tests exec node -p 'require("@playwright/test/package.json").version')"
-          pull_with_retry "${PLAYWRIGHT_DOCKER_IMAGE_REPOSITORY:-mcr.microsoft.com/playwright}:v$version-noble"
+          pull_with_retry "mcr.microsoft.com/playwright:v$version-noble"
           pull_with_retry mirror.gcr.io/library/nginx:stable-alpine
           pull_with_retry public.ecr.aws/docker/library/busybox:1.37
           pull_with_retry cgr.dev/chainguard/minio:latest-dev@sha256:d7c906993247627c19f37fc1fa302c34cf2d209ae0e7dc7d52fb0be6ac2849ba

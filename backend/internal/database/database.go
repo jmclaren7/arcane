@@ -291,9 +291,10 @@ func migrateDatabaseToVersionInternal(ctx context.Context, db *sql.DB, dbProvide
 // which is harmless: a second instance re-runs the same checks and finds nothing to
 // do, and the worst a genuine race can leave behind is a duplicate version row,
 // which Goose collapses when it reads its state. It can be deleted once no database
-// migrated by a pre-090 fork build is left in the wild.
+// migrated by a pre-091 fork build is left in the wild.
 const (
-	forkCommitEnvMigrationVersion          int64 = 90
+	forkCommitEnvMigrationVersion          int64 = 91
+	forkCommitEnvEventDedupRenumberVersion int64 = 90
 	forkCommitEnvRiskRenumberVersion       int64 = 88
 	forkCommitEnvBackupModeRenumberVersion int64 = 85
 	forkCommitEnvApnsRenumberVersion       int64 = 77
@@ -314,6 +315,7 @@ type forkCommitEnvRenumberErasInternal struct {
 	apns       bool // 77 — upstream's Apple push notification tables
 	backupMode bool // 85 — upstream's GitOps backup mode
 	risk       bool // 88 — upstream's vulnerability risk scoring tables
+	eventDedup bool // 90 — upstream's event deduplication key
 }
 
 func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbProvider string, provider *goose.Provider, currentVersion, requiredVersion int64) error {
@@ -326,9 +328,9 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		return err
 	}
 
-	// Decide *before* the UpTo below which of versions 71, 73, 74, 77, 85 and 88
+	// Decide *before* the UpTo below which of versions 71, 73, 74, 77, 85, 88 and 90
 	// are already recorded: on a 069-era database none is, and the UpTo applies
-	// upstream's real 071, 073, 074, 077, 085 and 088 itself (recording them); on any
+	// upstream's real 071, 073, 074, 077, 085, 088 and 090 itself (recording them); on any
 	// later era the recorded number belongs to the fork's own migration, so Goose skips
 	// the upstream migration that now owns it and its statements have to be
 	// replayed by hand.
@@ -350,7 +352,7 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 	belowForkVersion := forkCommitEnvMigrationVersion - 1
 	if currentVersion < belowForkVersion {
 		if _, err := provider.UpTo(ctx, belowForkVersion); err != nil {
-			return errors.WrapIff(err, "failed to apply embedded Goose migrations up to version %d for %s while repairing pre-renumber fork migration state", belowForkVersion, dbProvider)
+			return fmt.Errorf("failed to apply embedded Goose migrations up to version %d for %s while repairing pre-renumber fork migration state: %w", belowForkVersion, dbProvider, err)
 		}
 	}
 
@@ -370,7 +372,7 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return errors.WrapIff(err, "failed to start pre-renumber fork migration repair transaction for %s", dbProvider)
+		return fmt.Errorf("failed to start pre-renumber fork migration repair transaction for %s: %w", dbProvider, err)
 	}
 	defer func() {
 		_ = tx.Rollback()
@@ -386,26 +388,27 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		return err
 	}
 
-	// The column 088 adds is already present, so record it as applied rather than
+	// The column the fork migration adds is already present, so record it as applied rather than
 	// re-running its DDL, which would fail on the duplicate column.
 	if err := insertGooseMigrationVersionInternal(ctx, tx, dbProvider, forkCommitEnvMigrationVersion); err != nil {
 		return err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return errors.WrapIff(err, "failed to commit pre-renumber fork migration repair for %s", dbProvider)
+		return fmt.Errorf("failed to commit pre-renumber fork migration repair for %s: %w", dbProvider, err)
 	}
 
 	slog.Info("Repaired pre-renumber fork migration state",
 		"provider", dbProvider, "forkMigrationVersion", forkCommitEnvMigrationVersion,
 		"restoredSkippedMigration", !repositoryNamesPresent, "replayedVolumeWorkspaceRename", eras.mid,
 		"replayedBackupSupport", eras.late, "replayedPullRedeploy", eras.last, "replayedApns", eras.apns,
-		"replayedGitOpsBackupMode", eras.backupMode, "replayedVulnerabilityRisk", eras.risk)
+		"replayedGitOpsBackupMode", eras.backupMode, "replayedVulnerabilityRisk", eras.risk,
+		"replayedEventDeduplication", eras.eventDedup)
 	return nil
 }
 
 // recordedRenumberEraVersionsInternal reports which of the fork migration's old
-// version numbers (71, 73, 74, 77, 85, 88) are recorded as applied — for each, the
+// version numbers (71, 73, 74, 77, 85, 88, 90) are recorded as applied — for each, the
 // signature of the corresponding renumber era whose skipped upstream migration
 // the repair has to replay by hand.
 func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProvider string) (forkCommitEnvRenumberErasInternal, error) {
@@ -420,6 +423,7 @@ func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProv
 		{forkCommitEnvApnsRenumberVersion, &eras.apns},
 		{forkCommitEnvBackupModeRenumberVersion, &eras.backupMode},
 		{forkCommitEnvRiskRenumberVersion, &eras.risk},
+		{forkCommitEnvEventDedupRenumberVersion, &eras.eventDedup},
 	} {
 		applied, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, era.version)
 		if err != nil {
@@ -436,6 +440,7 @@ type forkCommitEnvReplayColumnsInternal struct {
 	backupSupport []string
 	pullRedeploy  []string
 	backupMode    []string
+	eventDedup    []string
 }
 
 // missingReplayColumnsInternal probes the columns each recorded era's replay would
@@ -455,6 +460,11 @@ func missingReplayColumnsInternal(ctx context.Context, db *sql.DB, dbProvider st
 	}
 	if eras.backupMode {
 		if missing.backupMode, err = missingBackupModeColumnsInternal(ctx, db, dbProvider); err != nil {
+			return forkCommitEnvReplayColumnsInternal{}, err
+		}
+	}
+	if eras.eventDedup {
+		if missing.eventDedup, err = missingEventDedupColumnsInternal(ctx, db, dbProvider); err != nil {
 			return forkCommitEnvReplayColumnsInternal{}, err
 		}
 	}
@@ -494,6 +504,12 @@ func replaySkippedUpstreamMigrationsInternal(ctx context.Context, execer sqlExec
 	// 085: GitOps backup mode.
 	if eras.backupMode {
 		if err := replaySkippedBackupModeInternal(ctx, execer, dbProvider, missing.backupMode); err != nil {
+			return err
+		}
+	}
+	// 090: event deduplication key.
+	if eras.eventDedup {
+		if err := replaySkippedEventDedupInternal(ctx, execer, dbProvider, missing.eventDedup); err != nil {
 			return err
 		}
 	}
@@ -551,11 +567,11 @@ func addSkippedRegistryRepositoryNamesColumnInternal(ctx context.Context, execer
 	case dbProviderPostgres:
 		query = `ALTER TABLE container_registries ADD COLUMN IF NOT EXISTS repository_names TEXT NOT NULL DEFAULT '[]'`
 	default:
-		return errors.Errorf("unsupported database provider: %s", dbProvider)
+		return fmt.Errorf("unsupported database provider: %s", dbProvider)
 	}
 
 	if _, err := execer.ExecContext(ctx, query); err != nil {
-		return errors.WrapIff(err, "failed to restore skipped container_registries.repository_names column for %s", dbProvider)
+		return fmt.Errorf("failed to restore skipped container_registries.repository_names column for %s: %w", dbProvider, err)
 	}
 	return nil
 }
@@ -636,12 +652,12 @@ SET permission = 'volumes:read'
 WHERE permission = 'volumes:browse'`,
 		}
 	default:
-		return errors.Errorf("unsupported database provider: %s", dbProvider)
+		return fmt.Errorf("unsupported database provider: %s", dbProvider)
 	}
 
 	for _, query := range queries {
 		if _, err := execer.ExecContext(ctx, query); err != nil {
-			return errors.WrapIff(err, "failed to replay skipped volume-workspace rename migration for %s", dbProvider)
+			return fmt.Errorf("failed to replay skipped volume-workspace rename migration for %s: %w", dbProvider, err)
 		}
 	}
 	return nil
@@ -799,7 +815,7 @@ func replaySkippedBackupSupportInternal(ctx context.Context, execer sqlExecerInt
 )`,
 		}
 	default:
-		return errors.Errorf("unsupported database provider: %s", dbProvider)
+		return fmt.Errorf("unsupported database provider: %s", dbProvider)
 	}
 
 	queries := tables
@@ -821,7 +837,7 @@ func replaySkippedBackupSupportInternal(ctx context.Context, execer sqlExecerInt
 
 	for _, query := range queries {
 		if _, err := execer.ExecContext(ctx, query); err != nil {
-			return errors.WrapIff(err, "failed to replay skipped backup-support migration for %s", dbProvider)
+			return fmt.Errorf("failed to replay skipped backup-support migration for %s: %w", dbProvider, err)
 		}
 	}
 	return nil
@@ -864,7 +880,7 @@ func replaySkippedPullRedeployInternal(ctx context.Context, execer sqlExecerInte
 	switch dbProvider {
 	case dbProviderSQLite, dbProviderPostgres:
 	default:
-		return errors.Errorf("unsupported database provider: %s", dbProvider)
+		return fmt.Errorf("unsupported database provider: %s", dbProvider)
 	}
 
 	for _, column := range pullRedeployGitOpsSyncColumnsInternal {
@@ -873,7 +889,7 @@ func replaySkippedPullRedeployInternal(ctx context.Context, execer sqlExecerInte
 		}
 		query := fmt.Sprintf(`ALTER TABLE gitops_syncs ADD COLUMN "%s" %s`, column.name, column.definition)
 		if _, err := execer.ExecContext(ctx, query); err != nil {
-			return errors.WrapIff(err, "failed to replay skipped GitOps pull/redeploy-after-sync migration for %s", dbProvider)
+			return fmt.Errorf("failed to replay skipped GitOps pull/redeploy-after-sync migration for %s: %w", dbProvider, err)
 		}
 	}
 	return nil
@@ -930,7 +946,7 @@ func replaySkippedBackupModeInternal(ctx context.Context, execer sqlExecerIntern
 	case dbProviderPostgres:
 		timestampType = "TIMESTAMPTZ"
 	default:
-		return errors.Errorf("unsupported database provider: %s", dbProvider)
+		return fmt.Errorf("unsupported database provider: %s", dbProvider)
 	}
 
 	for _, column := range backupModeGitOpsSyncColumnsInternal {
@@ -943,7 +959,7 @@ func replaySkippedBackupModeInternal(ctx context.Context, execer sqlExecerIntern
 		}
 		query := fmt.Sprintf(`ALTER TABLE gitops_syncs ADD COLUMN "%s" %s`, column.name, definition)
 		if _, err := execer.ExecContext(ctx, query); err != nil {
-			return errors.WrapIff(err, "failed to replay skipped GitOps backup-mode migration for %s", dbProvider)
+			return fmt.Errorf("failed to replay skipped GitOps backup-mode migration for %s: %w", dbProvider, err)
 		}
 	}
 
@@ -951,7 +967,48 @@ func replaySkippedBackupModeInternal(ctx context.Context, execer sqlExecerIntern
 	// so a crashed earlier repair can re-run it.
 	index := `CREATE UNIQUE INDEX IF NOT EXISTS idx_gitops_syncs_backup_project ON gitops_syncs(project_id) WHERE mode = 'backup'`
 	if _, err := execer.ExecContext(ctx, index); err != nil {
-		return errors.WrapIff(err, "failed to replay skipped GitOps backup-mode index for %s", dbProvider)
+		return fmt.Errorf("failed to replay skipped GitOps backup-mode index for %s: %w", dbProvider, err)
+	}
+	return nil
+}
+
+// missingEventDedupColumnsInternal probes the one column
+// 090_add_event_deduplication_key.sql adds, so the replay can skip it when a
+// crashed earlier repair already added it.
+func missingEventDedupColumnsInternal(ctx context.Context, db *sql.DB, dbProvider string) ([]string, error) {
+	present, err := columnExistsInternal(ctx, db, dbProvider, "events", "deduplication_key")
+	if err != nil {
+		return nil, err
+	}
+	if present {
+		return nil, nil
+	}
+	return []string{"deduplication_key"}, nil
+}
+
+// replaySkippedEventDedupInternal replays the Up statements of
+// 090_add_event_deduplication_key.sql, which Goose skipped because a 090-era fork
+// build had already recorded version 90 for its own migration. The ALTER is
+// filtered to missingColumns (computed by the caller — SQLite's ALTER TABLE has
+// no IF NOT EXISTS) and the unique index gains an IF NOT EXISTS guard, so
+// replaying on a database that already carries part or all of the schema is a
+// no-op.
+func replaySkippedEventDedupInternal(ctx context.Context, execer sqlExecerInternal, dbProvider string, missingColumns []string) error {
+	if dbProvider != dbProviderSQLite && dbProvider != dbProviderPostgres {
+		return fmt.Errorf("unsupported database provider: %s", dbProvider)
+	}
+
+	if slices.Contains(missingColumns, "deduplication_key") {
+		if _, err := execer.ExecContext(ctx, `ALTER TABLE events ADD COLUMN deduplication_key TEXT`); err != nil {
+			return fmt.Errorf("failed to replay skipped event deduplication-key migration for %s: %w", dbProvider, err)
+		}
+	}
+
+	// The migration writes this without IF NOT EXISTS; the replay adds the guard
+	// so a crashed earlier repair can re-run it.
+	index := `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_deduplication_key ON events (deduplication_key)`
+	if _, err := execer.ExecContext(ctx, index); err != nil {
+		return fmt.Errorf("failed to replay skipped event deduplication-key index for %s: %w", dbProvider, err)
 	}
 	return nil
 }
@@ -1049,7 +1106,7 @@ func replaySkippedVulnerabilityRiskBeforeUpToInternal(ctx context.Context, db *s
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return errors.WrapIff(err, "failed to start skipped vulnerability-risk replay transaction for %s", dbProvider)
+		return fmt.Errorf("failed to start skipped vulnerability-risk replay transaction for %s: %w", dbProvider, err)
 	}
 	defer func() {
 		_ = tx.Rollback()
@@ -1060,7 +1117,7 @@ func replaySkippedVulnerabilityRiskBeforeUpToInternal(ctx context.Context, db *s
 	}
 
 	if err := tx.Commit(); err != nil {
-		return errors.WrapIff(err, "failed to commit skipped vulnerability-risk replay for %s", dbProvider)
+		return fmt.Errorf("failed to commit skipped vulnerability-risk replay for %s: %w", dbProvider, err)
 	}
 	return nil
 }
@@ -1072,20 +1129,20 @@ func replaySkippedVulnerabilityRiskBeforeUpToInternal(ctx context.Context, db *s
 func replaySkippedVulnerabilityRiskInternal(ctx context.Context, execer sqlExecerInternal, dbProvider string, scorePresent bool) error {
 	queries, ok := vulnerabilityRiskStatementsInternal[dbProvider]
 	if !ok {
-		return errors.Errorf("unsupported database provider: %s", dbProvider)
+		return fmt.Errorf("unsupported database provider: %s", dbProvider)
 	}
 
 	if !scorePresent {
 		for _, query := range vulnerabilityRiskScoreStatementsInternal[dbProvider] {
 			if _, err := execer.ExecContext(ctx, query); err != nil {
-				return errors.WrapIff(err, "failed to replay skipped vulnerability cvss_score column for %s", dbProvider)
+				return fmt.Errorf("failed to replay skipped vulnerability cvss_score column for %s: %w", dbProvider, err)
 			}
 		}
 	}
 
 	for _, query := range queries {
 		if _, err := execer.ExecContext(ctx, query); err != nil {
-			return errors.WrapIff(err, "failed to replay skipped vulnerability-risk migration for %s", dbProvider)
+			return fmt.Errorf("failed to replay skipped vulnerability-risk migration for %s: %w", dbProvider, err)
 		}
 	}
 	return nil
@@ -1179,12 +1236,12 @@ var apnsTableStatementsInternal = map[string][]string{
 func replaySkippedApnsInternal(ctx context.Context, execer sqlExecerInternal, dbProvider string) error {
 	queries, ok := apnsTableStatementsInternal[dbProvider]
 	if !ok {
-		return errors.Errorf("unsupported database provider: %s", dbProvider)
+		return fmt.Errorf("unsupported database provider: %s", dbProvider)
 	}
 
 	for _, query := range queries {
 		if _, err := execer.ExecContext(ctx, query); err != nil {
-			return errors.WrapIff(err, "failed to replay skipped Apple push notification migration for %s", dbProvider)
+			return fmt.Errorf("failed to replay skipped Apple push notification migration for %s: %w", dbProvider, err)
 		}
 	}
 	return nil
@@ -1392,7 +1449,7 @@ func gooseVersionTableHasAppliedMigrationsInternal(ctx context.Context, db *sql.
 }
 
 func gooseMigrationVersionAppliedInternal(ctx context.Context, db *sql.DB, dbProvider string, version int64) (bool, error) {
-	queryFormat := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE is_applied = %s AND version_id = %%s", gooseVersionTable, appliedLiteralInternal(dbProvider))
+	queryFormat := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE is_applied = %s AND version_id = %%s", gooseVersionTable, kit.Ternary(dbProvider == dbProviderPostgres, "true", "1"))
 	query, args, err := sqlWithProviderPlaceholderInternal(dbProvider, queryFormat, version)
 	if err != nil {
 		return false, err
@@ -1400,7 +1457,7 @@ func gooseMigrationVersionAppliedInternal(ctx context.Context, db *sql.DB, dbPro
 
 	var count int
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
-		return false, errors.WrapIff(err, "failed to check Goose migration version %d for %s", version, dbProvider)
+		return false, fmt.Errorf("failed to check Goose migration version %d for %s: %w", version, dbProvider, err)
 	}
 	return count > 0, nil
 }
@@ -1412,17 +1469,17 @@ func columnExistsInternal(ctx context.Context, db *sql.DB, dbProvider, table, co
 	case dbProviderSQLite:
 		var count int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&count); err != nil {
-			return false, errors.WrapIff(err, "failed to inspect column %s.%s for sqlite", table, column)
+			return false, fmt.Errorf("failed to inspect column %s.%s for sqlite: %w", table, column, err)
 		}
 		return count > 0, nil
 	case dbProviderPostgres:
 		var exists bool
 		if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2)`, table, column).Scan(&exists); err != nil {
-			return false, errors.WrapIff(err, "failed to inspect column %s.%s for postgres", table, column)
+			return false, fmt.Errorf("failed to inspect column %s.%s for postgres: %w", table, column, err)
 		}
 		return exists, nil
 	default:
-		return false, errors.Errorf("unsupported database provider: %s", dbProvider)
+		return false, fmt.Errorf("unsupported database provider: %s", dbProvider)
 	}
 }
 

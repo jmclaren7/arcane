@@ -1691,18 +1691,18 @@ func TestUpdaterService_CollectComposeImagesHonorsContainerFilterInternal(t *tes
 	}
 
 	out := map[string]struct{}{}
-	svc.collectUsedImagesFromComposeContainersInternal(context.Background(), composeContainers, active,
+	svc.collectUsedImagesFromComposeContainersInternal(t.Context(), composeContainers, active,
 		dockerutil.NewContainerAutoUpdateFilter("cache", false), out)
 	require.Len(t, out, 1)
 
 	out = map[string]struct{}{}
-	svc.collectUsedImagesFromComposeContainersInternal(context.Background(), composeContainers, active,
+	svc.collectUsedImagesFromComposeContainersInternal(t.Context(), composeContainers, active,
 		dockerutil.NewContainerAutoUpdateFilter("web", true), out)
 	require.Len(t, out, 1)
 
 	// Include mode with an empty list collects nothing.
 	out = map[string]struct{}{}
-	svc.collectUsedImagesFromComposeContainersInternal(context.Background(), composeContainers, active,
+	svc.collectUsedImagesFromComposeContainersInternal(t.Context(), composeContainers, active,
 		dockerutil.NewContainerAutoUpdateFilter("", true), out)
 	require.Empty(t, out)
 }

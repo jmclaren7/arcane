@@ -53,7 +53,7 @@ func TestAutoHeal_FilterCandidates_SkipsSelfContainer(t *testing.T) {
 }
 
 func TestAutoHeal_ContainerFilter_IncludeMode(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, settingsSvc, _ := setupAnalyticsStateServicesInternal(t)
 	job, err := NewAutoHealJob(nil, settingsSvc, nil, nil, newTestAdmissionGateInternal(t))
 	require.NoError(t, err)

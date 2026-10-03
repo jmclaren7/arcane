@@ -314,6 +314,13 @@ func (c *Client) Clone(ctx context.Context, url, branch string, auth AuthConfig)
 	return c.cloneInternal(ctx, url, branch, auth, true)
 }
 
+// CloneWithHistory clones with full history and tags, for the readers a shallow
+// clone cannot serve: checking out a commit older than the branch tip, walking
+// history, or reading tags.
+func (c *Client) CloneWithHistory(ctx context.Context, url, branch string, auth AuthConfig) (string, error) {
+	return c.cloneInternal(ctx, url, branch, auth, false)
+}
+
 func (c *Client) cloneInternal(ctx context.Context, url, branch string, auth AuthConfig, shallow bool) (string, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
@@ -663,7 +670,7 @@ func (c *Client) TestConnection(ctx context.Context, url, branch string, auth Au
 			return nil
 		}
 	}
-	return errors.Errorf("branch %q not found in remote repository", branch)
+	return fmt.Errorf("branch %q not found in remote repository", branch)
 }
 
 // FileExists checks if a file exists in the repository

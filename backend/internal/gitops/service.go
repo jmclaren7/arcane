@@ -633,6 +633,9 @@ func (s *GitOpsSyncService) CreateSync(ctx context.Context, environmentID string
 	if req.RedeployAfterSync != nil {
 		syncRecord.RedeployAfterSync = *req.RedeployAfterSync
 	}
+	if req.InjectCommitEnv != nil {
+		syncRecord.InjectCommitEnv = *req.InjectCommitEnv
+	}
 	if validateSyncLimitsErr := validateSyncLimits(req.MaxSyncFiles, req.MaxSyncTotalSize, req.MaxSyncBinarySize); validateSyncLimitsErr != nil {
 		return nil, validateSyncLimitsErr
 	}
@@ -838,6 +841,9 @@ func (s *GitOpsSyncService) UpdateSync(ctx context.Context, environmentID, id st
 	if req.RedeployAfterSync != nil {
 		updates["redeploy_after_sync"] = *req.RedeployAfterSync
 	}
+	if req.InjectCommitEnv != nil {
+		updates["inject_commit_env"] = *req.InjectCommitEnv
+	}
 	if validateSyncLimitsErr := validateSyncLimits(req.MaxSyncFiles, req.MaxSyncTotalSize, req.MaxSyncBinarySize); validateSyncLimitsErr != nil {
 		return nil, validateSyncLimitsErr
 	}
@@ -904,6 +910,69 @@ func (s *GitOpsSyncService) UpdateSync(ctx context.Context, environmentID, id st
 	}
 
 	return s.GetSyncByID(ctx, environmentID, id)
+}
+
+// DetachManagedProjects turns every project this sync manages back into a
+// regular project: the compose editor unlocks and the sync stops managing it,
+// while the project's files, containers and the sync's repository binding are all
+// left alone. Auto-sync is switched off and the recurring job unregistered rather
+// than the sync deleted, so the configuration survives and a manual sync can
+// re-adopt the project later.
+//
+// The sync's admission lease is held across the release, because a run already
+// past PerformSync's admission check holds the ProjectID it loaded: without the
+// lease it could mirror repository files over the detached project and re-link it
+// through EnsureGitOpsProjectLinked after the binding was cleared. A sync row that
+// no longer exists needs no lease — nothing can run for it, and releasing its
+// stranded projects is the only way they become editable again.
+func (s *GitOpsSyncService) DetachManagedProjects(ctx context.Context, environmentID, id string, actor user.Actor) error {
+	syncRecord, loadErr := s.getSyncRecordByIDInternal(ctx, environmentID, id)
+	if loadErr != nil && !errors.Is(loadErr, common.ErrNotFound) {
+		return loadErr
+	}
+
+	if syncRecord != nil {
+		lease, admitted, err := s.jobs.TryAcquire(ctx, id)
+		if err != nil {
+			return fmt.Errorf("failed to admit GitOps detach: %w", err)
+		}
+		if !admitted {
+			return common.Classify(common.ErrConflict, fmt.Errorf("GitOps sync %s is running; retry once it finishes", id))
+		}
+		defer lease.Release(ctx)
+
+		// Unregister before the row is updated: a scheduled run returns early on
+		// AutoSync=false but does not unregister itself, so the job would otherwise
+		// keep firing and re-reading the row until restart.
+		s.unregisterSyncJobInternal(ctx, id)
+	}
+
+	released, err := s.projectService.ReleaseGitOpsProjectLinks(ctx, id, actor)
+	if err != nil {
+		if syncRecord != nil && syncRecord.AutoSync {
+			s.registerSyncJobInternal(ctx, syncRecord.ID, syncRecord.EnvironmentID, syncRecord.SyncInterval)
+		}
+		return err
+	}
+
+	slog.InfoContext(ctx, "Detached projects from GitOps sync", "syncId", id, "projectCount", len(released))
+
+	if syncRecord != nil && s.eventService != nil {
+		_, _ = s.eventService.CreateEvent(ctx, event.CreateEventRequest{
+			Type:          event.EventTypeGitSyncUpdate,
+			Severity:      event.EventSeverityInfo,
+			Title:         "Git sync detached",
+			Description:   fmt.Sprintf("Git sync '%s' no longer manages its project; auto sync was turned off", syncRecord.Name),
+			ResourceType:  new("git_sync"),
+			ResourceID:    new(syncRecord.ID),
+			ResourceName:  new(syncRecord.Name),
+			UserID:        new(actor.ID),
+			Username:      new(actor.Username),
+			EnvironmentID: new(syncRecord.EnvironmentID),
+		})
+	}
+
+	return nil
 }
 
 func (s *GitOpsSyncService) DeleteSync(ctx context.Context, environmentID, id string, actor user.Actor) error {

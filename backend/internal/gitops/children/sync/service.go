@@ -177,7 +177,19 @@ func (s *Service) prepareSyncSource(ctx context.Context, sync *projectpkg.GitOps
 		return nil, s.failSync(ctx, sync.ID, result, sync, actor, "Failed to get authentication config", err.Error())
 	}
 
-	repoPath, err := s.repoService.Clone(ctx, repository.URL, sync.Branch, authConfig)
+	// A retried run re-checks-out the revision its first attempt pinned, which the
+	// shallow clone of the branch tip will not contain once the branch has moved
+	// on, so that run needs history.
+	pinnedCommit, err := pinnedSyncRevisionInternal(ctx, sync.ID)
+	if err != nil {
+		return nil, s.failSync(ctx, sync.ID, result, sync, actor, "Failed to read the pinned source revision", err.Error())
+	}
+	clone := s.repoService.Clone
+	if pinnedCommit != "" {
+		clone = s.repoService.CloneWithHistory
+	}
+
+	repoPath, err := clone(ctx, repository.URL, sync.Branch, authConfig)
 	if err != nil {
 		return nil, s.failSync(ctx, sync.ID, result, sync, actor, "Failed to clone repository", err.Error())
 	}
@@ -218,6 +230,10 @@ func (s *Service) prepareSyncSource(ctx context.Context, sync *projectpkg.GitOps
 		}
 	}
 
+	if injected, ok := gitMetadataEnvContentInternal(sync, source.envContent, commitHash); ok {
+		source.envContent = &injected
+	}
+
 	// Detect a Docker Compose override file (compose.override.yaml, etc.) sitting
 	// beside the compose file in the repo, mirroring `docker compose` behavior.
 	// Only auto-load an override when the compose file was referenced by a
@@ -248,31 +264,47 @@ func (s *Service) prepareSyncSource(ctx context.Context, sync *projectpkg.GitOps
 	return source, nil
 }
 
-func pinSyncRevisionInternal(ctx context.Context, syncID, repoPath, commitHash string) (string, error) {
-	if previous, ok := jobcontext.Run(ctx); ok {
-		for _, target := range previous.Outcome.Targets {
-			if target.ID != syncID || len(target.RecoveryData) == 0 {
-				continue
-			}
-			var revision syncRevisionInternal
-			if err := json.Unmarshal(target.RecoveryData, &revision); err != nil {
-				return "", err
-			}
-			if revision.Commit != "" && revision.Commit != commitHash {
-				repository, err := git.PlainOpen(repoPath)
-				if err != nil {
-					return "", err
-				}
-				tree, err := repository.Worktree()
-				if err != nil {
-					return "", err
-				}
-				if checkoutErr := tree.Checkout(&git.CheckoutOptions{Hash: plumbing.NewHash(revision.Commit)}); checkoutErr != nil {
-					return "", checkoutErr
-				}
-				commitHash = revision.Commit
-			}
+// pinnedSyncRevisionInternal returns the commit an earlier attempt of this run
+// recorded, or "" on a first attempt. It is read before the clone as well, because
+// a pinned revision is the one case the shallow GitOps clone cannot serve.
+func pinnedSyncRevisionInternal(ctx context.Context, syncID string) (string, error) {
+	previous, ok := jobcontext.Run(ctx)
+	if !ok {
+		return "", nil
+	}
+	for _, target := range previous.Outcome.Targets {
+		if target.ID != syncID || len(target.RecoveryData) == 0 {
+			continue
 		}
+		var revision syncRevisionInternal
+		if err := json.Unmarshal(target.RecoveryData, &revision); err != nil {
+			return "", err
+		}
+		if revision.Commit != "" {
+			return revision.Commit, nil
+		}
+	}
+	return "", nil
+}
+
+func pinSyncRevisionInternal(ctx context.Context, syncID, repoPath, commitHash string) (string, error) {
+	pinnedCommit, err := pinnedSyncRevisionInternal(ctx, syncID)
+	if err != nil {
+		return "", err
+	}
+	if pinnedCommit != "" && pinnedCommit != commitHash {
+		repository, openErr := git.PlainOpen(repoPath)
+		if openErr != nil {
+			return "", openErr
+		}
+		tree, worktreeErr := repository.Worktree()
+		if worktreeErr != nil {
+			return "", worktreeErr
+		}
+		if checkoutErr := tree.Checkout(&git.CheckoutOptions{Hash: plumbing.NewHash(pinnedCommit)}); checkoutErr != nil {
+			return "", checkoutErr
+		}
+		commitHash = pinnedCommit
 	}
 	revision, err := json.Marshal(syncRevisionInternal{Commit: commitHash})
 	if err != nil {
@@ -285,6 +317,23 @@ func pinSyncRevisionInternal(ctx context.Context, syncID, repoPath, commitHash s
 		return "", progressErr
 	}
 	return commitHash, nil
+}
+
+// gitMetadataEnvContentInternal returns the sync's Git-sourced env content with
+// Arcane's commit metadata appended, and whether the sync opted into it. A sync
+// whose commit could not be resolved injects nothing rather than writing empty
+// values the deployed application would report as its commit.
+func gitMetadataEnvContentInternal(sync *projectpkg.GitOpsSync, gitEnvContent *string, commitHash string) (string, bool) {
+	if sync == nil || !sync.InjectCommitEnv || strings.TrimSpace(commitHash) == "" {
+		return "", false
+	}
+
+	baseContent := ""
+	if gitEnvContent != nil {
+		baseContent = *gitEnvContent
+	}
+
+	return projects.BuildGitMetadataEnvContent(baseContent, commitHash, sync.Branch), true
 }
 
 // performDirectorySync runs the directory-sync path and only triggers a
@@ -309,7 +358,7 @@ func (
 		return result, s.failSync(ctx, id, result, sync, actor, "Failed to walk directory", err.Error())
 	}
 
-	project, syncedFiles, _, contentsChanged, err := s.syncProjectDirectoryInternal(ctx, sync, syncFiles, actor)
+	project, syncedFiles, _, contentsChanged, err := s.syncProjectDirectoryInternal(ctx, sync, syncFiles, source.commitHash, actor)
 	if err != nil {
 		if errors.Is(err, common.ErrGitOpsSyncProjectBindingBroken) {
 			errMsg := err.Error()
@@ -848,6 +897,7 @@ func (
 	ctx context.Context,
 	sync *projectpkg.GitOpsSync,
 	syncFiles []projects.SyncFile,
+	commitHash string,
 	actor user.Actor,
 ) (
 	*projectpkg.Project,
@@ -856,7 +906,7 @@ func (
 	bool,
 	error,
 ) {
-	stage, err := s.stageDirectorySyncInternal(ctx, sync, syncFiles)
+	stage, err := s.stageDirectorySyncInternal(ctx, sync, syncFiles, commitHash)
 	if err != nil {
 		s.recordBrokenProjectBindingInternal(ctx, sync, actor, err)
 		return nil, nil, false, false, err
@@ -891,7 +941,7 @@ func (
 // repo layout after sync, including cleanup of files removed from the repo. For an
 // existing project the tree is sparse: only paths the sync touches are materialized
 // and the rest is linked to the live project, so validation never copies it.
-func (s *Service) stageDirectorySyncInternal(ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile) (stage *stagedDirectorySync, err error) {
+func (s *Service) stageDirectorySyncInternal(ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile, commitHash string) (stage *stagedDirectorySync, err error) {
 	projectsDir, err := s.projectService.GetProjectsDirectory(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get projects directory: %w", err)
@@ -902,6 +952,9 @@ func (s *Service) stageDirectorySyncInternal(ctx context.Context, sync *projectp
 	// overwrite — a raw .env write would silently wipe edits made in Arcane
 	// on every sync.
 	filteredSyncFiles, gitEnvContent := partitionReservedRootEnvFiles(ctx, syncFiles)
+	if injected, ok := gitMetadataEnvContentInternal(sync, gitEnvContent, commitHash); ok {
+		gitEnvContent = &injected
+	}
 
 	stageLogical, err := acfs.MkdirTemp(ctx, projectsDir, "/", ".gitops-sync-stage-*")
 	if err != nil {

@@ -776,6 +776,23 @@ func (s *SettingsService) SetIntSetting(ctx context.Context, key string, value i
 	return s.UpdateSetting(ctx, key, strconv.Itoa(value))
 }
 
+// ContainerAutoUpdateFilter reads the auto-update container list together with
+// its include-mode switch, so every consumer of the list interprets the mode the
+// same way instead of reading the CSV as a denylist on its own.
+func (s *SettingsService) ContainerAutoUpdateFilter(ctx context.Context) ContainerAutoUpdateFilter {
+	if s == nil {
+		return ContainerAutoUpdateFilter{}
+	}
+	return NewContainerAutoUpdateFilter(
+		s.GetStringSetting(ctx, "autoUpdateExcludedContainers"),
+		s.GetBoolSetting(ctx, "autoUpdateIncludeMode"),
+	)
+}
+
+// SetContainerAutoUpdateExclusion adds (excluded) or removes a container name in
+// the autoUpdateExcludedContainers setting. With autoUpdateIncludeMode enabled the
+// list holds included containers instead, so the operation inverts: excluding
+// removes the name from the list and un-excluding adds it.
 func (s *SettingsService) SetContainerAutoUpdateExclusion(ctx context.Context, containerName string, excluded bool) error {
 	s.writes.Lock()
 	defer s.writes.Unlock()
@@ -784,7 +801,11 @@ func (s *SettingsService) SetContainerAutoUpdateExclusion(ctx context.Context, c
 	}
 
 	ordered := kit.Unique(kit.TrimNonEmpty(strings.Split(s.GetStringSetting(ctx, "autoUpdateExcludedContainers"), ",")))
-	if excluded {
+	addToList := excluded
+	if s.GetBoolSetting(ctx, "autoUpdateIncludeMode") {
+		addToList = !excluded
+	}
+	if addToList {
 		ordered = kit.Unique(append(ordered, containerName))
 	} else {
 		ordered = slices.DeleteFunc(ordered, func(name string) bool { return name == containerName })

@@ -185,7 +185,7 @@ func (s *Service) Run(ctx context.Context, sync *projectpkg.GitOpsSync, actor us
 		}
 		result.Message = fmt.Sprintf("Successfully deployed swarm stack %s from %s", sync.ProjectName, sync.ComposePath)
 	case sync.SyncDirectory:
-		if project, syncedFiles, _, changed, err = s.syncProjectDirectory(ctx, sync, syncFiles, actor); err != nil {
+		if project, syncedFiles, _, changed, err = s.syncProjectDirectory(ctx, sync, syncFiles, source.commitHash, actor); err != nil {
 			message := kit.Ternary(errors.Is(err, common.ErrGitOpsSyncProjectBindingBroken), "GitOps project binding broken", "Failed to sync project directory")
 			return result, s.failSync(ctx, result, sync, actor, message, err)
 		}
@@ -333,6 +333,10 @@ func (s *Service) prepareSyncSource(ctx context.Context, sync *projectpkg.GitOps
 		}
 	}
 
+	if injected, ok := gitMetadataEnvContentInternal(sync, source.envContent, source.commitHash); ok {
+		source.envContent = &injected
+	}
+
 	// Like docker compose, only a standard compose filename auto-loads a sibling override; a custom path is the -f case.
 	if slices.Contains(projects.ComposeFileCandidates(), filepath.Base(sync.ComposePath)) {
 		overrideName, overrideContent, overrideFound, overrideErr := projects.ResolveComposeOverride(
@@ -353,6 +357,23 @@ func (s *Service) prepareSyncSource(ctx context.Context, sync *projectpkg.GitOps
 		}
 	}
 	return source, nil
+}
+
+// gitMetadataEnvContentInternal returns the sync's Git-sourced env content with
+// Arcane's commit metadata appended, and whether the sync opted into it. A sync
+// whose commit could not be resolved injects nothing rather than writing empty
+// values the deployed application would report as its commit.
+func gitMetadataEnvContentInternal(sync *projectpkg.GitOpsSync, gitEnvContent *string, commitHash string) (string, bool) {
+	if sync == nil || !sync.InjectCommitEnv || strings.TrimSpace(commitHash) == "" {
+		return "", false
+	}
+
+	baseContent := ""
+	if gitEnvContent != nil {
+		baseContent = *gitEnvContent
+	}
+
+	return projects.BuildGitMetadataEnvContent(baseContent, commitHash, sync.Branch), true
 }
 
 // syncComposeFile applies a single-file sync, creating the project on the first sync. It reports whether the
@@ -471,7 +492,7 @@ func (s *Service) failSync(ctx context.Context, result *gitops.SyncResult, sync 
 
 // syncProjectDirectory stages and validates the synced tree, then creates or updates the project. It reports
 // the synced paths, whether it created the project, and whether the contents changed.
-func (s *Service) syncProjectDirectory(ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile, actor user.Actor) (*projectpkg.Project, []string, bool, bool, error) {
+func (s *Service) syncProjectDirectory(ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile, commitHash string, actor user.Actor) (*projectpkg.Project, []string, bool, bool, error) {
 	projectsDir, err := s.projectService.GetProjectsDirectory(ctx)
 	if err != nil {
 		return nil, nil, false, false, fmt.Errorf("failed to get projects directory: %w", err)
@@ -507,6 +528,10 @@ func (s *Service) syncProjectDirectory(ctx context.Context, sync *projectpkg.Git
 		default:
 			slog.WarnContext(ctx, "dropping reserved Arcane env file from git payload; will be re-derived from override merge", "path", file.RelativePath)
 		}
+	}
+
+	if injected, ok := gitMetadataEnvContentInternal(sync, stage.gitEnvContent, commitHash); ok {
+		stage.gitEnvContent = &injected
 	}
 
 	if stage.project, err = s.DirectoryProject(ctx, sync); err != nil {

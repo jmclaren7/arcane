@@ -269,6 +269,10 @@ func migrateDatabase(ctx context.Context, db *sql.DB, dbProvider string, options
 		return nil
 	}
 
+	if repairErr := repairPreRenumberForkMigrationInternal(ctx, db, dbProvider, provider, currentVersion, requiredVersion); repairErr != nil {
+		return repairErr
+	}
+
 	if _, upToErr := provider.UpTo(ctx, requiredVersion); upToErr != nil {
 		return fmt.Errorf("failed to apply embedded Goose migrations for %s: %w", dbProvider, upToErr)
 	}

@@ -177,6 +177,77 @@ func (s *ProjectService) EnsureGitOpsProjectLinked(ctx context.Context, gitOpsSy
 	return nil
 }
 
+// ReleaseGitOpsProjectLinks is the inverse of EnsureGitOpsProjectLinked: every
+// project managed by syncID becomes a regular project again, and the sync stops
+// pointing at one with auto-sync switched off, so a restart does not re-register
+// its job. Files and containers are left untouched. A sync row that no longer
+// exists is still released, which is how projects stranded by a sync deleted
+// before deletes cleared the link become editable again.
+//
+// Callers must hold the sync's admission lease (see
+// GitOpsSyncService.DetachManagedProjects), otherwise a run already past
+// PerformSync's admission check can re-establish the binding it loaded before
+// the release.
+func (s *ProjectService) ReleaseGitOpsProjectLinks(ctx context.Context, syncID string, actor usertypes.Actor) ([]Project, error) {
+	syncID = strings.TrimSpace(syncID)
+	if syncID == "" {
+		return nil, errors.New("GitOps sync ID is required")
+	}
+
+	var managed []Project
+	if err := s.db.WithContext(ctx).Where("gitops_managed_by = ?", syncID).Find(&managed).Error; err != nil {
+		return nil, fmt.Errorf("failed to list projects managed by GitOps sync %s: %w", syncID, err)
+	}
+
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Project{}).Where("gitops_managed_by = ?", syncID).
+			Update("gitops_managed_by", nil).Error; err != nil {
+			return fmt.Errorf("failed to clear the GitOps link for sync %s: %w", syncID, err)
+		}
+		if err := tx.Model(&GitOpsSync{}).Where("id = ?", syncID).Updates(map[string]any{
+			"project_id": nil,
+			"auto_sync":  false,
+		}).Error; err != nil {
+			return fmt.Errorf("failed to release GitOps sync %s: %w", syncID, err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	for i := range managed {
+		// The compose file was resolved through the sync's compose path; drop the
+		// parsed entry so the next load rediscovers it from the directory.
+		if s.parsedCompose != nil {
+			s.parsedCompose.Invalidate(managed[i].ID)
+		}
+		metadata := database.JSON{"action": "gitops-detached", "projectID": managed[i].ID, "projectName": managed[i].Name, "syncID": syncID}
+		s.logProjectEvent(ctx, event.EventTypeProjectUpdate, managed[i].ID, managed[i].Name, actor, metadata, "could not log project GitOps detach action")
+	}
+
+	return managed, nil
+}
+
+// clearOrphanedGitOpsLinksInternal releases projects whose gitops_managed_by
+// points at a sync that no longer exists. Such a link is never recreated by a
+// sync run, yet it keeps the project read-only in the UI and exempt from
+// filesystem cleanup, so a project orphaned by a deleted sync would otherwise
+// stay stuck forever. A sync is always created before the project that
+// references it, so there is no window where a live link looks orphaned.
+func (s *ProjectService) clearOrphanedGitOpsLinksInternal(ctx context.Context) error {
+	result := s.db.WithContext(ctx).Model(&Project{}).
+		Where("gitops_managed_by IS NOT NULL AND gitops_managed_by <> ''").
+		Where("gitops_managed_by NOT IN (SELECT id FROM gitops_syncs)").
+		Update("gitops_managed_by", nil)
+	if result.Error != nil {
+		return fmt.Errorf("clear orphaned gitops project links failed: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		slog.InfoContext(ctx, "Released projects whose GitOps sync no longer exists; they are regular projects again", "count", result.RowsAffected)
+	}
+	return nil
+}
+
 // ValidateComposeDirectory loads a staged compose tree with the same settings,
 // Docker path mapping, and validation rules used by managed projects.
 func (s *ProjectService) ValidateComposeDirectory(ctx context.Context, projectName, projectPath, composeFileName string) (int, error) {
@@ -2546,6 +2617,12 @@ func (s *ProjectService) SyncProjectsFromFileSystem(ctx context.Context) error {
 		seen[discoveredProject.Path] = struct{}{}
 	}
 	maps.Copy(seen, renameSyncState.ProtectSeenPaths)
+
+	// Before cleanup decides anything, because a stale GitOps link exempts a
+	// project from it.
+	if orphanErr := s.clearOrphanedGitOpsLinksInternal(ctx); orphanErr != nil {
+		slog.WarnContext(ctx, "error clearing orphaned GitOps project links", "error", orphanErr)
+	}
 
 	// Decide deletions before performing any, so the mass-wipe guard can veto a
 	// suspicious pass (e.g. an unmounted projects volume) as a whole.

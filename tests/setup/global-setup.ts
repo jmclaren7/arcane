@@ -82,7 +82,7 @@ async function globalSetup() {
 		for (const image of [
 			'public.ecr.aws/docker/library/busybox:1.37',
 			'public.ecr.aws/docker/library/alpine:3.20',
-			'public.ecr.aws/nginx/nginx:stable-alpine'
+			'mirror.gcr.io/library/nginx:stable-alpine'
 		]) {
 			try {
 				execFileSync('docker', ['image', 'inspect', image], { stdio: 'ignore' });

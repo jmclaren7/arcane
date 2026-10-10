@@ -89,6 +89,8 @@ type (
 		RedeployAfterSync bool `json:"redeployAfterSync" required:"false" doc:"Redeploy the project after a sync that changed files even when it is stopped; a running project always is"`
 		BackupOnSave      bool `json:"backupOnSave" required:"false" doc:"Run the sync when project files are saved in Arcane; defaults to true, backup and bidirectional syncs only"`
 		BackupPending     bool `json:"backupPending" readOnly:"true"`
+
+		InjectCommitEnv bool `json:"injectCommitEnv" required:"false" doc:"Write ARCANE_GIT_COMMIT, ARCANE_GIT_COMMIT_SHORT and ARCANE_GIT_BRANCH into the synced project's env"`
 	}
 
 	GitOpsSyncCounts struct {

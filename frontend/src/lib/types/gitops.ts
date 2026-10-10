@@ -63,6 +63,7 @@ export interface GitOpsSync {
 	syncDirectory: boolean;
 	pullImageAfterSync: boolean;
 	redeployAfterSync: boolean;
+	injectCommitEnv: boolean;
 	syncedFiles?: string;
 	maxSyncFiles: number;
 	maxSyncTotalSize: number;

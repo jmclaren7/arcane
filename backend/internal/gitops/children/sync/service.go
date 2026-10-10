@@ -261,7 +261,7 @@ func (s *Service) syncTarget(
 			syncedFiles = append(syncedFiles, file.RelativePath)
 		}
 		composeDir := path.Dir(path.Join("/", filepath.ToSlash(sync.ComposePath)))
-		if !sync.SyncDirectory && sync.EnvContent != nil {
+		if !sync.SyncDirectory && (sync.EnvContent != nil || sync.InjectCommitEnv) {
 			if writeErr := (acfs.Root{Path: source.repoPath}).Write(stageCtx, path.Join(composeDir, ".env"), []byte(kit.FromPtr(source.envContent)), acfs.WriteOptions{Mode: kitfs.FilePerm}); writeErr != nil {
 				return nil, nil, false, s.failSync(ctx, result, sync, actor, "Failed to write sync environment variables", writeErr)
 			}
@@ -285,13 +285,13 @@ func (s *Service) syncTarget(
 		}
 		result.Message = fmt.Sprintf("Successfully deployed swarm stack %s from %s", sync.ProjectName, sync.ComposePath)
 	case source.pull != nil:
-		if project, syncedFiles, _, changed, err = s.syncProjectDirectory(stageCtx, sync, syncFiles, source.pull, actor); err != nil {
+		if project, syncedFiles, _, changed, err = s.syncProjectDirectory(stageCtx, sync, syncFiles, source.pull, "", actor); err != nil {
 			message := kit.Ternary(errors.Is(err, common.ErrGitOpsSyncProjectBindingBroken), "GitOps project binding broken", "Failed to pull repository changes into the project")
 			return nil, nil, false, s.failSync(ctx, result, sync, actor, message, err)
 		}
 		result.Message = fmt.Sprintf("Pulled %d changed file(s) into project %s", len(source.pull.Files)+len(source.pull.Removed), project.Name)
 	case sync.SyncDirectory:
-		if project, syncedFiles, _, changed, err = s.syncProjectDirectory(stageCtx, sync, syncFiles, nil, actor); err != nil {
+		if project, syncedFiles, _, changed, err = s.syncProjectDirectory(stageCtx, sync, syncFiles, nil, source.commitHash, actor); err != nil {
 			message := kit.Ternary(errors.Is(err, common.ErrGitOpsSyncProjectBindingBroken), "GitOps project binding broken", "Failed to sync project directory")
 			return nil, nil, false, s.failSync(ctx, result, sync, actor, message, err)
 		}
@@ -419,7 +419,21 @@ func (s *Service) prepareSyncSource(ctx context.Context, sync *projectpkg.GitOps
 		}
 		source.envContent = &merged
 	}
+	if injected, ok := gitMetadataEnvContent(sync, source.envContent, source.commitHash); ok {
+		source.envContent = &injected
+	}
 	return source, nil
+}
+
+// gitMetadataEnvContent returns the sync's Git-sourced env content with
+// Arcane's commit metadata appended, and whether the sync opted into it. A sync
+// whose commit could not be resolved injects nothing rather than writing empty
+// values the deployed application would report as its commit.
+func gitMetadataEnvContent(sync *projectpkg.GitOpsSync, gitEnvContent *string, commitHash string) (string, bool) {
+	if sync == nil || !sync.InjectCommitEnv || strings.TrimSpace(commitHash) == "" {
+		return "", false
+	}
+	return projects.BuildGitMetadataEnvContent(kit.FromPtr(gitEnvContent), commitHash, sync.Branch), true
 }
 
 func (s *Service) resolveSyncOverride(ctx context.Context, sync *projectpkg.GitOpsSync, source *preparedSyncSource) error {
@@ -591,6 +605,7 @@ func (s *Service) syncProjectDirectory(
 	sync *projectpkg.GitOpsSync,
 	syncFiles []projects.SyncFile,
 	pull *PullRequest,
+	commitHash string,
 	actor types.Actor,
 ) (*projectpkg.Project, []string, bool, bool, error) {
 	projectsDir, err := s.projectService.GetProjectsDirectory(ctx)
@@ -639,6 +654,9 @@ func (s *Service) syncProjectDirectory(
 			return nil, nil, false, false, fmt.Errorf("failed to merge sync environment variables: %w", mergeErr)
 		}
 		stage.gitEnvContent = &merged
+	}
+	if injected, ok := gitMetadataEnvContent(sync, stage.gitEnvContent, commitHash); ok {
+		stage.gitEnvContent = &injected
 	}
 
 	if stage.project, err = s.DirectoryProject(ctx, sync); err != nil {

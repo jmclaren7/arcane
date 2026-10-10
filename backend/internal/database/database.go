@@ -202,6 +202,9 @@ func Initialize(ctx context.Context, databaseURL string, options MigrationOption
 		slog.ErrorContext(ctx, "Failed to run migrations", "error", migrationErr)
 		return nil, fmt.Errorf("failed to run migrations: %w", migrationErr)
 	}
+	if forkSchemaErr := ensureForkSchema(ctx, sqlDB, dbProvider); forkSchemaErr != nil {
+		return nil, fmt.Errorf("failed to apply fork schema: %w", forkSchemaErr)
+	}
 	if readDSN == "" {
 		var pool *stmtCachePool
 		if pool, err = newStmtCachePool(ctx, sqlDB); err != nil {

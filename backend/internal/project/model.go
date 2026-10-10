@@ -123,6 +123,20 @@ type GitOpsSync struct {
 	BackupFailureReason *string              `json:"backupFailureReason,omitempty" gorm:"column:backup_failure_reason"`
 	LastBackupAt        *time.Time           `json:"lastBackupAt,omitempty" gorm:"column:last_backup_at" sortable:"true"`
 	LastBackupSnapshot  *string              `json:"-" gorm:"column:last_backup_snapshot"`
+
+	// InjectCommitEnv writes the synced commit into the project's env
+	// (ARCANE_GIT_COMMIT / ARCANE_GIT_COMMIT_SHORT / ARCANE_GIT_BRANCH) so the
+	// deployed application can report the commit it was deployed from. The keys
+	// land in the Git-sourced env file and merge into .env, where compose can
+	// interpolate them and the autoInjectEnv setting can hand them to every
+	// service. They are excluded from sync change detection, so a commit that
+	// leaves the synced files untouched does not force a redeploy: a running
+	// container keeps reporting the commit it was actually deployed from until
+	// the next deploy. Turning this back off drops the keys on the next sync,
+	// except for a repository that ships no .env of its own — there nothing
+	// replaces the Git-sourced env, so the last injected values stay in the
+	// project's .env until they are removed by hand.
+	InjectCommitEnv bool `json:"injectCommitEnv" gorm:"column:inject_commit_env"`
 }
 
 // BackupState derives the persisted backup lifecycle state.

@@ -455,6 +455,7 @@ func (s *GitOpsSyncService) CreateSync(ctx context.Context, environmentID string
 		SyncDirectory:        kit.FromPtr(req.SyncDirectory),
 		PullImageAfterSync:   kit.FromPtr(req.PullImageAfterSync),
 		RedeployAfterSync:    kit.FromPtr(req.RedeployAfterSync),
+		InjectCommitEnv:      kit.FromPtr(req.InjectCommitEnv),
 		MaxSyncFiles:         *cmp.Or(req.MaxSyncFiles, &defaultMaxFiles),
 		MaxSyncTotalSize:     *cmp.Or(req.MaxSyncTotalSize, &defaultMaxTotalSize),
 		MaxSyncBinarySize:    *cmp.Or(req.MaxSyncBinarySize, &defaultMaxBinarySize),
@@ -614,6 +615,9 @@ func (s *GitOpsSyncService) UpdateSync(ctx context.Context, environmentID, id st
 	}
 	if req.RedeployAfterSync != nil {
 		updates["redeploy_after_sync"] = *req.RedeployAfterSync
+	}
+	if req.InjectCommitEnv != nil {
+		updates["inject_commit_env"] = *req.InjectCommitEnv
 	}
 	if limitsErr := validateSyncLimits(req.MaxSyncFiles, req.MaxSyncTotalSize, req.MaxSyncBinarySize); limitsErr != nil {
 		return nil, limitsErr

@@ -94,7 +94,7 @@ func TestGitOpsSyncService_SyncProjectDirectory_RefusesDuplicateOnNameCollision(
 		{RelativePath: "docker-compose.yaml", Content: []byte("services:\n  app:\n    image: nginx:alpine\n")},
 	}
 
-	_, _, _, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	_, _, _, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.ErrorIs(t, err, common.ErrGitOpsSyncProjectBindingBroken)
 
 	_, statErr := os.Stat(filepath.Join(projectsDir, "Dozzle-1"))
@@ -142,7 +142,7 @@ services:
 		},
 	}
 
-	project, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	project, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.NoError(t, err)
 	require.NotNil(t, project)
 	require.True(t, created)
@@ -247,7 +247,7 @@ services:
 	keepBefore, err := os.Stat(filepath.Join(projectPath, "keep.txt"))
 	require.NoError(t, err)
 
-	updatedProject, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	updatedProject, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.NoError(t, err)
 	require.NotNil(t, updatedProject)
 	require.False(t, created)
@@ -338,7 +338,7 @@ func TestGitOpsSyncService_SyncProjectDirectory_PreservesEnvOverrideAndAddsNewGi
 		},
 	}
 
-	updatedProject, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	updatedProject, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.NoError(t, err)
 	require.NotNil(t, updatedProject)
 	require.False(t, created)
@@ -429,7 +429,7 @@ func TestGitOpsSyncService_SyncProjectDirectory_MigratesLegacyTrackedEnvOnFirstS
 		},
 	}
 
-	updatedProject, _, created, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	updatedProject, _, created, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.NoError(t, err)
 	require.NotNil(t, updatedProject)
 	require.False(t, created)
@@ -485,7 +485,7 @@ func TestGitOpsSyncService_SyncProjectDirectory_IgnoresCommittedReservedEnvFiles
 		},
 	}
 
-	project, syncedFiles, created, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	project, syncedFiles, created, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.NoError(t, err)
 	require.NotNil(t, project)
 	require.True(t, created)
@@ -543,7 +543,7 @@ func TestGitOpsSyncService_DirectorySync_RealWalkWithNestedConfig(t *testing.T) 
 	}
 	assert.Contains(t, composeContent, "./config/dynamic_config.yml")
 
-	project, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	project, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.NoError(t, err)
 	require.NotNil(t, project)
 	require.True(t, created)
@@ -614,7 +614,7 @@ func TestGitOpsSyncService_DirectorySync_OverwritesExistingDirectoryAtFilePath(t
 	syncFiles, err := svc.walkAndParseSyncDirectory(ctx, sync, repoPath)
 	require.NoError(t, err)
 
-	updatedProject, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	updatedProject, syncedFiles, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.NoError(t, err)
 	require.NotNil(t, updatedProject)
 	require.False(t, created)
@@ -788,7 +788,7 @@ func TestGitOpsSyncService_UpdateDirectorySyncProject_RollsBackScopedChangesOnUp
 		_ = db.Callback().Update().Remove(callbackName)
 	}()
 
-	updatedProject, _, _, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	updatedProject, _, _, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.Error(t, err)
 	require.Nil(t, updatedProject)
 	assert.Contains(t, err.Error(), "forced project update failure")
@@ -986,7 +986,7 @@ func TestGitOpsSyncService_SyncProjectDirectory_PreservesUnreadableBindMountData
 		},
 	}
 
-	updatedProject, _, created, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, user.Actor{})
+	updatedProject, _, created, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, "", user.Actor{})
 	require.NoError(t, err)
 	require.NotNil(t, updatedProject)
 	require.False(t, created)
@@ -1001,4 +1001,222 @@ func TestGitOpsSyncService_SyncProjectDirectory_PreservesUnreadableBindMountData
 	composeBytes, err := os.ReadFile(filepath.Join(updatedProject.Path, "docker-compose.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(composeBytes), "nginx:1.27-alpine")
+}
+
+func TestGitOpsSyncService_SyncProjectDirectory_InjectsCommitEnvWhenEnabled(t *testing.T) {
+	ctx := t.Context()
+	svc, db, _ := setupSyncTestService(t)
+
+	const commitHash = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+
+	sync := &projectpkg.GitOpsSync{
+		ID:              "sync-directory-commit-env",
+		Name:            "demo-sync",
+		EnvironmentID:   "0",
+		RepositoryID:    "repo-1",
+		Branch:          "main",
+		ComposePath:     "apps/demo/docker-compose.yaml",
+		ProjectName:     "demo-project",
+		SyncDirectory:   true,
+		InjectCommitEnv: true,
+	}
+	require.NoError(t, db.Create(sync).Error)
+
+	syncFiles := []projects.SyncFile{
+		{
+			RelativePath: "docker-compose.yaml",
+			Content: []byte(`services:
+  app:
+    image: nginx:alpine
+    environment:
+      COMMIT: ${ARCANE_GIT_COMMIT}
+`),
+		},
+	}
+
+	project, _, created, _, err := svc.syncProjectDirectory(ctx, sync, syncFiles, commitHash, user.Actor{})
+	require.NoError(t, err)
+	require.NotNil(t, project)
+	require.True(t, created)
+
+	effectiveEnv, err := projects.ParseProjectEnvFile(filepath.Join(project.Path, ".env"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, commitHash, effectiveEnv[projects.GitCommitEnvKey])
+	assert.Equal(t, "9f2c1ab", effectiveEnv[projects.GitCommitShortEnvKey])
+	assert.Equal(t, "main", effectiveEnv[projects.GitBranchEnvKey])
+
+	gitEnv, err := projects.ParseProjectEnvFile(filepath.Join(project.Path, ".env.git"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, commitHash, gitEnv[projects.GitCommitEnvKey])
+
+	// The metadata is Git-sourced, so it must not have been copied into the
+	// user-editable override.
+	_, statErr := os.Stat(filepath.Join(project.Path, "project.env"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestGitOpsSyncService_SyncProjectDirectory_CommitOnlyChangeDoesNotRedeploy(t *testing.T) {
+	ctx := t.Context()
+	svc, db, projectsDir := setupSyncTestService(t)
+
+	const (
+		previousCommit = "1111111111111111111111111111111111111111"
+		currentCommit  = "2222222222222222222222222222222222222222"
+	)
+	composeContent := `services:
+  app:
+    image: nginx:1.27-alpine
+`
+	repoEnvContent := "FOO=git\n"
+	syncedEnvContent := projects.BuildGitMetadataEnvContent(repoEnvContent, previousCommit, "main")
+
+	projectPath := filepath.Join(projectsDir, "demo-project")
+	require.NoError(t, os.MkdirAll(projectPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, "docker-compose.yaml"), []byte(composeContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env.git"), []byte(syncedEnvContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env"), []byte(syncedEnvContent), 0o644))
+
+	project := &projectpkg.Project{
+		ID:      "proj-directory-commit-env",
+		Name:    "demo-project",
+		DirName: new("demo-project"),
+		Path:    projectPath,
+		Status:  projectpkg.ProjectStatusStopped,
+	}
+	require.NoError(t, db.Create(project).Error)
+
+	oldSyncedFilesJSON, err := json.Marshal([]string{"docker-compose.yaml"})
+	require.NoError(t, err)
+
+	sync := &projectpkg.GitOpsSync{
+		ID:              "sync-directory-commit-env-update",
+		Name:            "demo-sync",
+		EnvironmentID:   "0",
+		RepositoryID:    "repo-1",
+		Branch:          "main",
+		ComposePath:     "apps/demo/docker-compose.yaml",
+		ProjectName:     "demo-project",
+		ProjectID:       &project.ID,
+		SyncDirectory:   true,
+		InjectCommitEnv: true,
+		SyncedFiles:     new(string(oldSyncedFilesJSON)),
+	}
+	require.NoError(t, db.Create(sync).Error)
+
+	syncFiles := []projects.SyncFile{
+		{RelativePath: "docker-compose.yaml", Content: []byte(composeContent)},
+		{RelativePath: ".env", Content: []byte(repoEnvContent)},
+	}
+
+	updatedProject, _, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, currentCommit, user.Actor{})
+	require.NoError(t, err)
+	require.NotNil(t, updatedProject)
+	require.False(t, created)
+	assert.False(t, changed, "a commit that leaves the synced files untouched must not trigger a redeploy")
+
+	effectiveEnv, err := projects.ParseProjectEnvFile(filepath.Join(updatedProject.Path, ".env"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, currentCommit, effectiveEnv[projects.GitCommitEnvKey], "the new commit is still written to disk")
+	assert.Equal(t, "git", effectiveEnv["FOO"])
+}
+
+// TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsChanged
+// covers the first sync after the flag is switched on: the project gains the
+// metadata keys, so an already-running project must be redeployed for its
+// containers to receive them at all.
+func TestGitOpsSyncService_SyncProjectDirectory_EnablingInjectionMarksContentsChanged(t *testing.T) {
+	ctx := t.Context()
+	svc, db, projectsDir := setupSyncTestService(t)
+
+	composeContent := `services:
+  app:
+    image: nginx:1.27-alpine
+`
+	repoEnvContent := "FOO=git\n"
+
+	projectPath := filepath.Join(projectsDir, "demo-project")
+	require.NoError(t, os.MkdirAll(projectPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, "docker-compose.yaml"), []byte(composeContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env.git"), []byte(repoEnvContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(projectPath, ".env"), []byte(repoEnvContent), 0o644))
+
+	project := &projectpkg.Project{
+		ID:      "proj-directory-enable-injection",
+		Name:    "demo-project",
+		DirName: new("demo-project"),
+		Path:    projectPath,
+		Status:  projectpkg.ProjectStatusRunning,
+	}
+	require.NoError(t, db.Create(project).Error)
+
+	oldSyncedFilesJSON, err := json.Marshal([]string{"docker-compose.yaml"})
+	require.NoError(t, err)
+
+	sync := &projectpkg.GitOpsSync{
+		ID:              "sync-directory-enable-injection",
+		Name:            "demo-sync",
+		EnvironmentID:   "0",
+		RepositoryID:    "repo-1",
+		Branch:          "main",
+		ComposePath:     "apps/demo/docker-compose.yaml",
+		ProjectName:     "demo-project",
+		ProjectID:       &project.ID,
+		SyncDirectory:   true,
+		InjectCommitEnv: true,
+		SyncedFiles:     new(string(oldSyncedFilesJSON)),
+	}
+	require.NoError(t, db.Create(sync).Error)
+
+	syncFiles := []projects.SyncFile{
+		{RelativePath: "docker-compose.yaml", Content: []byte(composeContent)},
+		{RelativePath: ".env", Content: []byte(repoEnvContent)},
+	}
+
+	const commitHash = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+	updatedProject, _, created, changed, err := svc.syncProjectDirectory(ctx, sync, syncFiles, commitHash, user.Actor{})
+	require.NoError(t, err)
+	require.NotNil(t, updatedProject)
+	require.False(t, created)
+	assert.True(t, changed, "newly injected variables must reach running containers")
+
+	effectiveEnv, err := projects.ParseProjectEnvFile(filepath.Join(updatedProject.Path, ".env"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, commitHash, effectiveEnv[projects.GitCommitEnvKey])
+}
+
+func TestGitMetadataEnvContentInternal(t *testing.T) {
+	const commitHash = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+	repoEnv := "FOO=git\n"
+
+	t.Run("returns nothing when the sync did not opt in", func(t *testing.T) {
+		_, ok := gitMetadataEnvContentInternal(&projectpkg.GitOpsSync{Branch: "main"}, &repoEnv, commitHash)
+		assert.False(t, ok)
+	})
+
+	t.Run("returns nothing when the commit could not be resolved", func(t *testing.T) {
+		sync := &projectpkg.GitOpsSync{Branch: "main", InjectCommitEnv: true}
+		_, ok := gitMetadataEnvContentInternal(sync, &repoEnv, "")
+		assert.False(t, ok)
+	})
+
+	t.Run("appends to the repository env and stands alone when the repo has none", func(t *testing.T) {
+		sync := &projectpkg.GitOpsSync{Branch: "main", InjectCommitEnv: true}
+
+		withRepoEnv, ok := gitMetadataEnvContentInternal(sync, &repoEnv, commitHash)
+		require.True(t, ok)
+		parsed, err := projects.ParseProjectEnvContent(withRepoEnv, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "git", parsed["FOO"])
+		assert.Equal(t, commitHash, parsed[projects.GitCommitEnvKey])
+
+		withoutRepoEnv, ok := gitMetadataEnvContentInternal(sync, nil, commitHash)
+		require.True(t, ok)
+		parsed, err = projects.ParseProjectEnvContent(withoutRepoEnv, nil)
+		require.NoError(t, err)
+		assert.Equal(t, projects.EnvMap{
+			projects.GitCommitEnvKey:      commitHash,
+			projects.GitCommitShortEnvKey: "9f2c1ab",
+			projects.GitBranchEnvKey:      "main",
+		}, parsed)
+	})
 }

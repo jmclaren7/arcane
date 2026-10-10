@@ -71,8 +71,10 @@ export const environmentFormSchema = environmentUpdateSchema
 		lifecycleMaxTimeoutSec: z.coerce.number().int().nonnegative(),
 		autoUpdateDelay: z.coerce.number().int().min(0).max(8760),
 		autoUpdateExcludedContainers: z.string().optional(),
+		autoUpdateIncludeMode: z.boolean(),
 		autoHealEnabled: z.boolean(),
 		autoHealExcludedContainers: z.string(),
+		autoHealIncludeMode: z.boolean(),
 		autoHealMaxRestarts: z.coerce.number().int().min(1),
 		autoHealRestartWindow: z.coerce.number().int().min(1)
 	})

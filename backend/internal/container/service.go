@@ -1576,8 +1576,10 @@ func (s *ContainerService) GetContainerDetails(ctx context.Context, id string) (
 			ContainerID:        details.ID,
 			CurrentContainerID: currentContainerID,
 		}),
+		// Read through the settings service so the list and its include-mode
+		// switch cannot drift apart at this call site.
 		AutoUpdateEnabled: !labels.IsUpdateDisabled(details.Labels) &&
-			!docker.ContainerNameExcluded([]string{details.Name}, docker.ExcludedContainerNameSet(s.settingsService.GetStringSetting(ctx, "autoUpdateExcludedContainers"))),
+			!s.settingsService.ContainerAutoUpdateFilter(ctx).Excludes([]string{details.Name}),
 		UpdateInfo: updates[details.ID],
 		Hardened:   dhi.Info(kit.FromPtr(imageInspect.Config).Labels, time.Now()),
 		ActivityID: details.ActivityID,
@@ -2236,7 +2238,7 @@ func (s *ContainerService) BuildSummaries(
 	currentContainerErr error,
 ) []types.ContainerSummary {
 	items := make([]types.ContainerSummary, 0, len(containers))
-	excluded := docker.ExcludedContainerNameSet(s.settingsService.GetStringSetting(ctx, "autoUpdateExcludedContainers"))
+	autoUpdateFilter := s.settingsService.ContainerAutoUpdateFilter(ctx)
 	for _, dc := range containers {
 		summary := types.NewContainerSummary(dc)
 		policy := updater.DefaultLabelPolicy().TagPolicy(dc.Labels)
@@ -2267,7 +2269,7 @@ func (s *ContainerService) BuildSummaries(
 				ContainerID:        summary.ID,
 				CurrentContainerID: currentContainerID,
 			}),
-			AutoUpdateEnabled: !labels.IsUpdateDisabled(dc.Labels) && !docker.ContainerNameExcluded(dc.Names, excluded),
+			AutoUpdateEnabled: !labels.IsUpdateDisabled(dc.Labels) && !autoUpdateFilter.Excludes(dc.Names),
 			Hidden:            hidden,
 			ResourceSample:    summary.ResourceSample,
 		})

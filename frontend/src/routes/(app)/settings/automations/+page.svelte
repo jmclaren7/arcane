@@ -14,11 +14,13 @@
 		'autoUpdate',
 		'autoUpdateDelay',
 		'autoUpdateExcludedContainers',
+		'autoUpdateIncludeMode',
 		'githubToken',
 		'scheduledPruneEnabled',
 		'vulnerabilityScanEnabled',
 		'autoHealEnabled',
 		'autoHealExcludedContainers',
+		'autoHealIncludeMode',
 		'autoHealMaxRestarts',
 		'autoHealRestartWindow'
 	]}

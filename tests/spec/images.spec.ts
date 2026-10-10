@@ -537,10 +537,10 @@ test.describe('Management', () => {
 
 			await page
 				.getByRole('textbox', { name: 'Image Name *' })
-				.fill('public.ecr.aws/docker/library/alpine');
+				.fill('mirror.gcr.io/library/alpine');
 			await page.getByRole('textbox', { name: 'Tag' }).fill('3.20');
 			await expect(page.getByRole('textbox', { name: 'Image Name *' })).toHaveValue(
-				'public.ecr.aws/docker/library/alpine'
+				'mirror.gcr.io/library/alpine'
 			);
 			await expect(page.getByRole('textbox', { name: 'Tag' })).toHaveValue('3.20');
 

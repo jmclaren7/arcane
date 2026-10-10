@@ -793,12 +793,37 @@ func (s *UpdaterService) ClearImageUpdateRecord(ctx context.Context, record upda
 	return query.Where("id = ? AND container_id = ?", record.ID, "").Update("has_update", false).Error
 }
 
-// ExcludedContainers returns auto-update exclusions from Arcane settings.
+// ExcludedContainers returns auto-update exclusions from Arcane settings. In
+// include mode the configured names are the only containers allowed to update,
+// so the exclusion list is materialized from every other known container: the
+// embedded updater engine only understands an exclusion list through this port.
 func (s *UpdaterService) ExcludedContainers(ctx context.Context) ([]string, error) {
 	if s == nil || s.deps.Settings == nil {
 		return nil, nil
 	}
-	return kit.Unique(kit.TrimNonEmpty(strings.Split(s.deps.Settings.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""), ","))), nil
+	filter := s.deps.Settings.ContainerAutoUpdateFilter(ctx)
+	if !filter.IncludeMode() {
+		return filter.ListedNames(), nil
+	}
+
+	if s.deps.Docker == nil {
+		return nil, errors.New("docker client unavailable to resolve include-mode exclusions")
+	}
+	dcli, err := s.deps.Docker.GetClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	listResult, err := dcli.ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, summary := range listResult.Items {
+		if name := docker.ContainerNameFromNames(summary.Names); name != "" && !filter.Lists(name) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }
 
 // ProjectByComposeName resolves an Arcane project from a Docker Compose project name.
@@ -1167,9 +1192,9 @@ func (s *UpdaterService) collectUsedImagesFromContainers(ctx context.Context, ou
 	if err != nil {
 		return err
 	}
-	var excludedContainers map[string]bool
+	var updateFilter settings.ContainerAutoUpdateFilter
 	if s.deps.Settings != nil {
-		excludedContainers = docker.ExcludedContainerNameSet(s.deps.Settings.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""))
+		updateFilter = s.deps.Settings.ContainerAutoUpdateFilter(ctx)
 	}
 	listResult, err := dcli.ContainerList(ctx, client.ContainerListOptions{})
 	if err != nil {
@@ -1182,7 +1207,7 @@ func (s *UpdaterService) collectUsedImagesFromContainers(ctx context.Context, ou
 			continue
 		}
 
-		if docker.ContainerNameExcluded(summary.Names, excludedContainers) {
+		if updateFilter.Excludes(summary.Names) {
 			slog.DebugContext(ctx, "collectUsedImagesFromContainers: skipping excluded container", "containerId", summary.ID, "names", summary.Names)
 			continue
 		}
@@ -1253,8 +1278,16 @@ func (s *UpdaterService) collectUsedImagesFromProjects(ctx context.Context, out 
 		return err
 	}
 
+	var composeUpdateFilter settings.ContainerAutoUpdateFilter
+	if s.deps.Settings != nil {
+		composeUpdateFilter = s.deps.Settings.ContainerAutoUpdateFilter(ctx)
+	}
 	for _, summary := range composeContainers {
 		if _, isActive := activeProjectNames[docker.ComposeProjectLabel(summary.Labels)]; !isActive || labels.IsUpdateDisabled(summary.Labels) {
+			continue
+		}
+		if composeUpdateFilter.Excludes(summary.Names) {
+			slog.DebugContext(ctx, "collectUsedImagesFromComposeContainers: skipping excluded container", "containerId", summary.ID, "names", summary.Names)
 			continue
 		}
 		imageRef := strings.TrimSpace(summary.Image)

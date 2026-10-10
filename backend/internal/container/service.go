@@ -1268,11 +1268,13 @@ func (s *ContainerService) GetContainerDetails(ctx context.Context, id string) (
 	details := containertypes.NewDetails(containerInspect)
 	currentContainerID, currentContainerErr := cgroup.CurrentContainerID()
 	details.RedeployDisabled = labels.ShouldDisableArcaneServerRedeploy(details.Labels, details.ID, currentContainerID, currentContainerErr)
-	var excluded map[string]bool
+	// Read through the settings service so the list and its include-mode switch
+	// cannot drift apart at this call site.
+	var autoUpdateFilter settings.ContainerAutoUpdateFilter
 	if s.settingsService != nil {
-		excluded = docker.ExcludedContainerNameSet(s.settingsService.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""))
+		autoUpdateFilter = s.settingsService.ContainerAutoUpdateFilter(ctx)
 	}
-	details.AutoUpdateEnabled = !labels.IsUpdateDisabled(details.Labels) && !docker.ContainerNameExcluded([]string{details.Name}, excluded)
+	details.AutoUpdateEnabled = !labels.IsUpdateDisabled(details.Labels) && !autoUpdateFilter.Excludes([]string{details.Name})
 	updates := s.lookupContainerUpdateInfoInternal(ctx, []container.Summary{{ID: details.ID, Image: details.Image, ImageID: details.ImageID, Labels: details.Labels}})
 	details.UpdateInfo = updates[details.ID]
 	s.applyContainerDetailsIconInternal(ctx, &details)
@@ -1852,9 +1854,9 @@ func (
 	currentContainerErr error,
 ) []containertypes.Summary {
 	items := make([]containertypes.Summary, 0, len(containers))
-	var excluded map[string]bool
+	var autoUpdateFilter settings.ContainerAutoUpdateFilter
 	if s.settingsService != nil {
-		excluded = docker.ExcludedContainerNameSet(s.settingsService.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""))
+		autoUpdateFilter = s.settingsService.ContainerAutoUpdateFilter(ctx)
 	}
 	for _, dc := range containers {
 		summary := containertypes.NewSummary(dc)
@@ -1866,7 +1868,7 @@ func (
 		}
 		summary.UpdateInfo = updateInfoMap[dc.ID]
 		summary.RedeployDisabled = labels.ShouldDisableArcaneServerRedeploy(summary.Labels, summary.ID, currentContainerID, currentContainerErr)
-		summary.AutoUpdateEnabled = !labels.IsUpdateDisabled(dc.Labels) && !docker.ContainerNameExcluded(dc.Names, excluded)
+		summary.AutoUpdateEnabled = !labels.IsUpdateDisabled(dc.Labels) && !autoUpdateFilter.Excludes(dc.Names)
 		summary.Hidden, _ = kit.ParseBool(dc.Labels[libarcane.HiddenResourceLabel])
 		items = append(items, summary)
 	}

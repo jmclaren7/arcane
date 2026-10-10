@@ -205,6 +205,7 @@ func DefaultSettingsConfig() *Settings {
 		AutoUpdate:                            SettingVariable{Value: "false"},
 		AutoUpdateInterval:                    SettingVariable{Value: "0 0 0 * * *"},
 		AutoUpdateExcludedContainers:          SettingVariable{Value: ""},
+		AutoUpdateIncludeMode:                 SettingVariable{Value: "false"},
 		PollingEnabled:                        SettingVariable{Value: "true"},
 		PollingInterval:                       SettingVariable{Value: "0 0 * * * *"},
 		ImageEventWatcherEnabled:              SettingVariable{Value: "false"},
@@ -233,6 +234,7 @@ func DefaultSettingsConfig() *Settings {
 		AutoHealEnabled:                       SettingVariable{Value: "false"},
 		AutoHealInterval:                      SettingVariable{Value: "0 */5 * * * *"},
 		AutoHealExcludedContainers:            SettingVariable{Value: ""},
+		AutoHealIncludeMode:                   SettingVariable{Value: "false"},
 		AutoHealMaxRestarts:                   SettingVariable{Value: "5"},
 		AutoHealRestartWindow:                 SettingVariable{Value: "30"},
 		VolumeHelperIdleTimeout:               SettingVariable{Value: "10"},
@@ -1038,9 +1040,24 @@ func (s *SettingsService) SetStringSetting(ctx context.Context, key, value strin
 	return s.UpdateSetting(ctx, key, value)
 }
 
+// ContainerAutoUpdateFilter reads the auto-update container list together with
+// its include-mode switch, so every consumer of the list interprets the mode the
+// same way instead of reading the CSV as a denylist on its own.
+func (s *SettingsService) ContainerAutoUpdateFilter(ctx context.Context) ContainerAutoUpdateFilter {
+	if s == nil {
+		return ContainerAutoUpdateFilter{}
+	}
+	return NewContainerAutoUpdateFilter(
+		s.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""),
+		s.GetBoolSetting(ctx, "autoUpdateIncludeMode", false),
+	)
+}
+
 // SetContainerAutoUpdateExclusionInternal adds or removes a container name from
 // the autoUpdateExcludedContainers setting. When excluded is true the container
-// is added to the list; when false it is removed.
+// is added to the list; when false it is removed. With autoUpdateIncludeMode
+// enabled the list holds included containers instead, so the operation inverts:
+// excluding removes the name from the list and un-excluding adds it.
 func (s *SettingsService) SetContainerAutoUpdateExclusionInternal(ctx context.Context, containerName string, excluded bool) error {
 	s.writes.Lock()
 	defer s.writes.Unlock()
@@ -1050,7 +1067,14 @@ func (s *SettingsService) SetContainerAutoUpdateExclusionInternal(ctx context.Co
 
 	ordered := kit.Unique(kit.TrimNonEmpty(strings.Split(s.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""), ",")))
 
-	if excluded {
+	// In include mode the list is an allowlist, so "exclude this container" means
+	// taking it off the list and "stop excluding" means putting it on.
+	addToList := excluded
+	if s.GetBoolSetting(ctx, "autoUpdateIncludeMode", false) {
+		addToList = !excluded
+	}
+
+	if addToList {
 		ordered = kit.Unique(append(ordered, containerName))
 	} else {
 		filtered := ordered[:0]

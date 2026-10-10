@@ -246,19 +246,29 @@
 {#snippet autoUpdateSettings(job: JobStatus)}
 	{#if job.id === 'auto-update'}
 		<div class="space-y-3">
-			<div class="space-y-1">
-				<Label>
-					{m.excluded_containers()}
-					{#await containersPromise then containers}
-						<span class="ml-1 font-normal text-muted-foreground">
-							({containers.filter((c) => excludedContainers.has(getContainerName(c))).length})
-						</span>
-					{/await}
-				</Label>
-				<p class="text-xs text-muted-foreground">{m.auto_update_exclude_description()}</p>
-				<p class="text-xs text-muted-foreground">
-					{m.auto_update_check_label_hint({ label: `${UPDATE_CHECK_LABEL}=false` })}
-				</p>
+			<div class="flex items-start justify-between gap-3">
+				<div class="space-y-1">
+					<Label>
+						{formInputs.autoUpdateIncludeMode.value ? m.include_containers() : m.excluded_containers()}
+						{#await containersPromise then containers}
+							<span class="ml-1 font-normal text-muted-foreground">
+								({containers.filter((c) => excludedContainers.has(getContainerName(c))).length})
+							</span>
+						{/await}
+					</Label>
+					<p class="text-xs text-muted-foreground">
+						{formInputs.autoUpdateIncludeMode.value ? m.auto_update_include_description() : m.auto_update_exclude_description()}
+					</p>
+					<p class="text-xs text-muted-foreground">
+						{m.auto_update_check_label_hint({ label: `${UPDATE_CHECK_LABEL}=false` })}
+					</p>
+				</div>
+				<div class="flex shrink-0 items-center gap-2" title={m.container_list_include_mode_description()}>
+					<Label for="auto-update-include-mode">
+						<span class="text-xs font-normal text-muted-foreground">{m.container_list_include_mode_label()}</span>
+					</Label>
+					<Switch id="auto-update-include-mode" bind:checked={formInputs.autoUpdateIncludeMode.value} />
+				</div>
 			</div>
 
 			<div class="space-y-2">
@@ -320,16 +330,26 @@
 				</div>
 			</div>
 
-			<div class="space-y-1">
-				<Label>
-					{m.excluded_containers()}
-					{#await containersPromise then containers}
-						<span class="ml-1 font-normal text-muted-foreground">
-							({containers.filter((c) => autoHealExcludedContainers.has(getContainerName(c))).length})
-						</span>
-					{/await}
-				</Label>
-				<p class="text-xs text-muted-foreground">{m.auto_heal_exclude_description()}</p>
+			<div class="flex items-start justify-between gap-3">
+				<div class="space-y-1">
+					<Label>
+						{formInputs.autoHealIncludeMode.value ? m.include_containers() : m.excluded_containers()}
+						{#await containersPromise then containers}
+							<span class="ml-1 font-normal text-muted-foreground">
+								({containers.filter((c) => autoHealExcludedContainers.has(getContainerName(c))).length})
+							</span>
+						{/await}
+					</Label>
+					<p class="text-xs text-muted-foreground">
+						{formInputs.autoHealIncludeMode.value ? m.auto_heal_include_description() : m.auto_heal_exclude_description()}
+					</p>
+				</div>
+				<div class="flex shrink-0 items-center gap-2" title={m.container_list_include_mode_description()}>
+					<Label for="auto-heal-include-mode">
+						<span class="text-xs font-normal text-muted-foreground">{m.container_list_include_mode_label()}</span>
+					</Label>
+					<Switch id="auto-heal-include-mode" bind:checked={formInputs.autoHealIncludeMode.value} />
+				</div>
 			</div>
 
 			<div class="space-y-2">

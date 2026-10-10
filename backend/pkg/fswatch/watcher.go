@@ -323,10 +323,21 @@ func (fw *Watcher) addExistingDirectories(ctx context.Context, root string) erro
 }
 
 func (fw *Watcher) addExistingDirectoriesRecursiveInternal(ctx context.Context, path, logicalPath string, ancestors map[string]struct{}) error {
+	// Same exclusions as the discovery walker: Arcane's own scratch directories
+	// and filesystem snapshot copies never hold project content. Watching them
+	// would turn Arcane's own GitOps staging and backup writes — which contain a
+	// copy of the project's compose file — into project syncs.
+	if path != fw.watchedPath {
+		name := filepath.Base(path)
+		if projects.IsInternalScratchDirName(name) || projects.IsFilesystemSnapshotDirName(name) {
+			return nil
+		}
+	}
+
 	identity, err := projects.ResolveDirectoryIdentityInternal(path)
 	if err != nil {
 		if path != fw.watchedPath && errors.Is(err, os.ErrPermission) {
-			slog.WarnContext(ctx, "Skipping unreadable directory for watcher", "path", path, "error", err)
+			slog.DebugContext(ctx, "Skipping unreadable directory for watcher", "path", path, "error", err)
 			return nil
 		}
 		return err
@@ -347,7 +358,9 @@ func (fw *Watcher) addExistingDirectoriesRecursiveInternal(ctx context.Context, 
 			return nil
 		}
 
-		fw.addWatchPathInternal(ctx, path, logicalPath)
+		if !fw.addWatchPathInternal(ctx, path, logicalPath) {
+			return nil
+		}
 
 		if fw.maxDepth > 0 && depth == fw.maxDepth {
 			return nil
@@ -357,7 +370,7 @@ func (fw *Watcher) addExistingDirectoriesRecursiveInternal(ctx context.Context, 
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		if path != fw.watchedPath && errors.Is(err, os.ErrPermission) {
-			slog.WarnContext(ctx, "Skipping unreadable directory for watcher", "path", path, "error", err)
+			slog.DebugContext(ctx, "Skipping unreadable directory for watcher", "path", path, "error", err)
 			return nil
 		}
 		return err
@@ -409,7 +422,12 @@ func (fw *Watcher) logicalPathForWatchEventInternal(path string) string {
 	return filepath.Join(bestLogicalPath, rel)
 }
 
-func (fw *Watcher) addWatchPathInternal(ctx context.Context, path, logicalPath string) {
+// addWatchPathInternal subscribes to path (and, for a followed symlink, its
+// resolved target). It reports false when the directory is unreadable, which
+// also means its entries cannot be listed, so the caller stops descending
+// instead of logging the same permission failure a second time from ReadDir.
+func (fw *Watcher) addWatchPathInternal(ctx context.Context, path, logicalPath string) bool {
+	readable := true
 	watchPaths := []string{path}
 	if fw.followSymlinks {
 		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
@@ -421,12 +439,26 @@ func (fw *Watcher) addWatchPathInternal(ctx context.Context, path, logicalPath s
 
 	for _, watchPath := range watchPaths {
 		fw.watchAliases[filepath.Clean(watchPath)] = filepath.Clean(logicalPath)
-		if err := fw.watcher.Add(watchPath); err != nil {
+		err := fw.watcher.Add(watchPath)
+		switch {
+		case err == nil:
+		case errors.Is(err, os.ErrPermission):
+			// Data directories a project's own containers own (database files,
+			// application state) are routinely unreadable to Arcane. Not being
+			// able to watch them is expected and costs nothing: compose and env
+			// files live above them.
+			readable = false
+			slog.DebugContext(ctx, "Skipping unreadable directory for watcher", "path", watchPath, "error", err)
+		default:
+			// Anything else is worth surfacing — notably ENOSPC, which on Linux
+			// means the inotify watch limit is exhausted rather than a full disk.
 			slog.WarnContext(ctx, "Failed to add directory to watcher",
 				"path", watchPath,
 				"error", err)
 		}
 	}
+
+	return readable
 }
 
 func (fw *Watcher) dirDepth(path string) int {

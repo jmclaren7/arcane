@@ -150,6 +150,9 @@ var overrideDocRules = map[string]overrideDocRule{
 	"autoHealExcludedContainers": {
 		requires: "AUTO_HEAL_ENABLED=true to have effect at runtime.",
 	},
+	"autoHealIncludeMode": {
+		requires: "AUTO_HEAL_ENABLED=true to have effect at runtime.",
+	},
 	"autoHealMaxRestarts": {
 		requires: "AUTO_HEAL_ENABLED=true to have effect at runtime.",
 	},

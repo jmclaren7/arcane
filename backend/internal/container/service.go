@@ -1266,6 +1266,9 @@ func (s *ContainerService) GetContainerDetails(ctx context.Context, id string) (
 		slog.WarnContext(ctx, "Failed to fetch container update info", "error", err)
 	}
 	resolvedIcon := s.resolveContainerIcon(ctx, details.Labels, map[string]projects.ArcaneComposeMetadata{})
+	// Read through the settings service so the list and its include-mode switch
+	// cannot drift apart at this call site.
+	autoUpdateFilter := s.settingsService.ContainerAutoUpdateFilter(ctx)
 
 	return containertypes.Details{ //exhaustruct:enforce
 		ID:               details.ID,
@@ -1285,7 +1288,7 @@ func (s *ContainerService) GetContainerDetails(ctx context.Context, id string) (
 		IconDarkURL:      resolvedIcon.IconDarkURL,
 		RedeployDisabled: labels.ShouldDisableArcaneServerRedeploy(details.Labels, details.ID, currentContainerID, currentContainerErr),
 		AutoUpdateEnabled: !labels.IsUpdateDisabled(details.Labels) &&
-			!docker.ContainerNameExcluded([]string{details.Name}, docker.ExcludedContainerNameSet(s.settingsService.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""))),
+			!autoUpdateFilter.Excludes([]string{details.Name}),
 		UpdateInfo: updates[details.ID],
 		ActivityID: details.ActivityID,
 	}, nil
@@ -1848,7 +1851,7 @@ func (s *ContainerService) BuildSummaries(
 	currentContainerErr error,
 ) []containertypes.Summary {
 	items := make([]containertypes.Summary, 0, len(containers))
-	excluded := docker.ExcludedContainerNameSet(s.settingsService.GetStringSetting(ctx, "autoUpdateExcludedContainers", ""))
+	autoUpdateFilter := s.settingsService.ContainerAutoUpdateFilter(ctx)
 	for _, dc := range containers {
 		summary := containertypes.NewSummary(dc)
 		policy := updater.DefaultLabelPolicy().TagPolicy(dc.Labels)
@@ -1874,7 +1877,7 @@ func (s *ContainerService) BuildSummaries(
 			UpdateStrategy:    kit.Ternary(policyErr != nil, cmp.Or(policy.Strategy, "auto"), resolved.Strategy),
 			UpdateInfo:        updateInfoMap[dc.ID],
 			RedeployDisabled:  labels.ShouldDisableArcaneServerRedeploy(summary.Labels, summary.ID, currentContainerID, currentContainerErr),
-			AutoUpdateEnabled: !labels.IsUpdateDisabled(dc.Labels) && !docker.ContainerNameExcluded(dc.Names, excluded),
+			AutoUpdateEnabled: !labels.IsUpdateDisabled(dc.Labels) && !autoUpdateFilter.Excludes(dc.Names),
 			Hidden:            hidden,
 			ResourceSample:    summary.ResourceSample,
 		})

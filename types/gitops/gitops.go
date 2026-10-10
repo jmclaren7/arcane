@@ -340,6 +340,14 @@ type GitOpsSync struct {
 	//
 	// Required: true
 	BackupPending bool `json:"backupPending"`
+
+	// InjectCommitEnv indicates if the synced commit is written into the
+	// project's env as ARCANE_GIT_COMMIT, ARCANE_GIT_COMMIT_SHORT and
+	// ARCANE_GIT_BRANCH, so the deployed application can report the commit it
+	// was deployed from.
+	//
+	// Required: true
+	InjectCommitEnv bool `json:"injectCommitEnv"`
 }
 
 // SyncCounts contains counts of syncs by status within the current filtered set.
@@ -607,6 +615,14 @@ type CreateSyncRequest struct {
 	// Required: false
 	RedeployAfterSync *bool `json:"redeployAfterSync,omitempty"`
 
+	// InjectCommitEnv writes the synced commit into the project's env as
+	// ARCANE_GIT_COMMIT, ARCANE_GIT_COMMIT_SHORT and ARCANE_GIT_BRANCH, so the
+	// deployed application can report the commit it was deployed from.
+	// Defaults to false.
+	//
+	// Required: false
+	InjectCommitEnv *bool `json:"injectCommitEnv,omitempty"`
+
 	// MaxSyncFiles is the maximum number of files to sync.
 	// 0 means unlimited; env var overrides take precedence.
 	// Default: 0
@@ -752,6 +768,13 @@ type UpdateSyncRequest struct {
 	//
 	// Required: false
 	RedeployAfterSync *bool `json:"redeployAfterSync,omitzero"`
+
+	// InjectCommitEnv writes the synced commit into the project's env as
+	// ARCANE_GIT_COMMIT, ARCANE_GIT_COMMIT_SHORT and ARCANE_GIT_BRANCH, so the
+	// deployed application can report the commit it was deployed from.
+	//
+	// Required: false
+	InjectCommitEnv *bool `json:"injectCommitEnv,omitzero"`
 
 	// MaxSyncFiles is the maximum number of files to sync.
 	// 0 means unlimited; env var overrides take precedence.

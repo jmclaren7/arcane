@@ -514,6 +514,11 @@ type Update struct {
 	// Required: false
 	AutoUpdateExcludedContainers *string `json:"autoUpdateExcludedContainers,omitzero"`
 
+	// AutoUpdateIncludeMode treats the auto-update container list as containers to include instead of exclude.
+	//
+	// Required: false
+	AutoUpdateIncludeMode *string `json:"autoUpdateIncludeMode,omitzero"`
+
 	// AutoHealEnabled indicates if automatic container healing is enabled.
 	//
 	// Required: false
@@ -528,6 +533,11 @@ type Update struct {
 	//
 	// Required: false
 	AutoHealExcludedContainers *string `json:"autoHealExcludedContainers,omitzero"`
+
+	// AutoHealIncludeMode treats the auto-heal container list as containers to include instead of exclude.
+	//
+	// Required: false
+	AutoHealIncludeMode *string `json:"autoHealIncludeMode,omitzero"`
 
 	// AutoHealMaxRestarts is the maximum number of auto-heal restarts per container within the restart window.
 	//

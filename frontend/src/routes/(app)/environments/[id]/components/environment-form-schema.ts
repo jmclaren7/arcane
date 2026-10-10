@@ -70,8 +70,10 @@ export const environmentFormSchema = environmentUpdateSchema
 		lifecycleDefaultRunnerImage: z.string(),
 		lifecycleMaxTimeoutSec: z.coerce.number().int().nonnegative(),
 		autoUpdateExcludedContainers: z.string().optional(),
+		autoUpdateIncludeMode: z.boolean(),
 		autoHealEnabled: z.boolean(),
 		autoHealExcludedContainers: z.string(),
+		autoHealIncludeMode: z.boolean(),
 		autoHealMaxRestarts: z.coerce.number().int().min(1),
 		autoHealRestartWindow: z.coerce.number().int().min(1)
 	})

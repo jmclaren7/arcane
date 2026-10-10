@@ -122,6 +122,7 @@ var (
 		{Method: http.MethodPatch, PathPattern: "/api/agents/{id}/gitops/syncs/{syncId}", CommandName: "gitops_sync.update"},
 		{Method: http.MethodDelete, PathPattern: "/api/agents/{id}/gitops/syncs/{syncId}", CommandName: "gitops_sync.delete"},
 		{Method: http.MethodPost, PathPattern: "/api/agents/{id}/gitops/syncs/{syncId}", CommandName: "gitops_sync.action"},
+		{Method: http.MethodPost, PathPattern: "/api/agents/{id}/gitops/syncs/{syncId}/detach", CommandName: "gitops_sync.detach"},
 		{Method: http.MethodGet, PathPattern: "/api/agents/{id}/gitops/syncs/{syncId}/status", CommandName: "gitops_sync.status"},
 		{Method: http.MethodGet, PathPattern: "/api/agents/{id}/gitops/syncs/{syncId}/files", CommandName: "gitops_sync.files"},
 		{Method: http.MethodGet, PathPattern: "/api/agents/{id}/gitops/syncs/{syncId}/backup/history", CommandName: "gitops_sync.backup.history"},

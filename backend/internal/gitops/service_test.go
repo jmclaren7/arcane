@@ -2760,3 +2760,109 @@ func TestGitOpsCreateSync_LinksExistingProjectInEveryMode(t *testing.T) {
 		})
 	}
 }
+
+func createDetachTestSyncAndProject(t *testing.T, db *database.DB, syncID, projectID string) {
+	t.Helper()
+	require.NoError(t, db.Create(&projectpkg.GitOpsSync{
+		ID:            syncID,
+		Name:          "Detach Sync",
+		EnvironmentID: "0",
+		RepositoryID:  "repo-1",
+		ComposePath:   "apps/app/compose.yaml",
+		ProjectName:   "app",
+		ProjectID:     &projectID,
+		AutoSync:      true,
+		SyncInterval:  5,
+	}).Error)
+	require.NoError(t, db.Create(&projectpkg.Project{
+		ID:              projectID,
+		Name:            "app",
+		Path:            t.TempDir(),
+		Status:          projectpkg.ProjectStatusStopped,
+		GitOpsManagedBy: &syncID,
+	}).Error)
+}
+
+func TestGitOpsSyncService_DetachManagedProjectsWaitsForActiveSync(t *testing.T) {
+	gate := newGitOpsAdmissionGateForTest(t)
+	scheduler := &gitOpsSyncTestScheduler{}
+	svc, db, _ := setupGitOpsSyncDirectoryTestService(t, scheduler, gate)
+	syncID, projectID := "sync-detach-race", "proj-detach-race"
+	createDetachTestSyncAndProject(t, db, syncID, projectID)
+
+	// Stand in for a run that already passed PerformSync's admission and is
+	// holding the ProjectID it loaded.
+	lease, admitted, err := gate.TryAcquire(t.Context(), types.SchedulerAdmissionKey{Scope: gitOpsSyncAdmissionScope, ID: syncID})
+	require.NoError(t, err)
+	require.True(t, admitted)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.DetachManagedProjects(t.Context(), "0", syncID, types.Actor{})
+	}()
+	select {
+	case detachErr := <-done:
+		require.FailNowf(t, "detached while a sync held admission", "%v", detachErr)
+	case <-time.After(400 * time.Millisecond):
+	}
+
+	var project projectpkg.Project
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	require.NotNil(t, project.GitOpsManagedBy, "the binding must survive while the in-flight run holds it")
+	assert.Empty(t, scheduler.removed, "a waiting detach must not unregister the job yet")
+
+	lease.Release(t.Context())
+	select {
+	case detachErr := <-done:
+		require.NoError(t, detachErr)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "detach did not run after admission was released")
+	}
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	assert.Nil(t, project.GitOpsManagedBy)
+}
+
+func TestGitOpsSyncService_DetachManagedProjectsUnregistersJob(t *testing.T) {
+	scheduler := &gitOpsSyncTestScheduler{}
+	svc, db, _ := setupGitOpsSyncDirectoryTestService(t, scheduler, newGitOpsAdmissionGateForTest(t))
+	syncID, projectID := "sync-detach-job", "proj-detach-job"
+	createDetachTestSyncAndProject(t, db, syncID, projectID)
+
+	require.NoError(t, svc.DetachManagedProjects(t.Context(), "0", syncID, types.Actor{}))
+
+	// A scheduled run returns early on AutoSync=false but never unregisters, so
+	// the detach has to remove the job itself.
+	assert.Contains(t, scheduler.removed, entityjobs.GitOpsSyncJobPrefix+syncID)
+
+	var project projectpkg.Project
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	assert.Nil(t, project.GitOpsManagedBy)
+
+	var syncRecord projectpkg.GitOpsSync
+	require.NoError(t, db.Where("id = ?", syncID).First(&syncRecord).Error)
+	assert.False(t, syncRecord.AutoSync)
+	assert.Nil(t, syncRecord.ProjectID)
+}
+
+func TestGitOpsSyncService_DetachManagedProjectsReleasesStrandedProject(t *testing.T) {
+	scheduler := &gitOpsSyncTestScheduler{}
+	svc, db, _ := setupGitOpsSyncDirectoryTestService(t, scheduler, newGitOpsAdmissionGateForTest(t))
+
+	deletedSyncID := "sync-deleted-by-old-build"
+	projectID := "proj-stranded"
+	require.NoError(t, db.Create(&projectpkg.Project{
+		ID:              projectID,
+		Name:            "stranded",
+		Path:            t.TempDir(),
+		Status:          projectpkg.ProjectStatusStopped,
+		GitOpsManagedBy: &deletedSyncID,
+	}).Error)
+
+	// Nothing can run for a sync that is gone, so the release must still go through.
+	require.NoError(t, svc.DetachManagedProjects(t.Context(), "0", deletedSyncID, types.Actor{}))
+	assert.Empty(t, scheduler.removed)
+
+	var project projectpkg.Project
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	assert.Nil(t, project.GitOpsManagedBy)
+}

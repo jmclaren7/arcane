@@ -107,6 +107,19 @@ func RegisterGitOpsSyncs(api huma.API, syncService *GitOpsSyncService) {
 	handlerutil.RegisterSecured(
 		api,
 		handlerutil.Operation(
+			"detachGitOpsSyncProjects",
+			"POST",
+			syncPath+"/detach",
+			"Detach managed projects",
+			"Turn this sync's managed projects into regular, editable projects and switch auto sync off",
+			"GitOps Syncs",
+		),
+		authz.PermGitOpsUpdate,
+		h.DetachProjects,
+	)
+	handlerutil.RegisterSecured(
+		api,
+		handlerutil.Operation(
 			"performGitOpsSync",
 			"POST",
 			syncPath+"/sync",

@@ -249,6 +249,7 @@ func (s *ProjectService) EnsureGitOpsProjectLinked(ctx context.Context, gitOpsSy
 		SyncDirectory:          gitOpsSync.SyncDirectory,
 		PullImageAfterSync:     gitOpsSync.PullImageAfterSync,
 		RedeployAfterSync:      gitOpsSync.RedeployAfterSync,
+		InjectCommitEnv:        gitOpsSync.InjectCommitEnv,
 		Mode:                   gitOpsSync.Mode,
 		BackupDirectory:        gitOpsSync.BackupDirectory,
 		BackupPaths:            gitOpsSync.BackupPaths,

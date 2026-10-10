@@ -91,6 +91,8 @@ type (
 		RedeployAfterSync bool `json:"redeployAfterSync" required:"false"`
 		BackupOnSave      bool `json:"backupOnSave" required:"false"`
 		BackupPending     bool `json:"backupPending" readOnly:"true"`
+
+		InjectCommitEnv bool `json:"injectCommitEnv" required:"false" doc:"Write ARCANE_GIT_COMMIT, ARCANE_GIT_COMMIT_SHORT and ARCANE_GIT_BRANCH into the synced project's env"`
 	}
 
 	GitOpsSyncCounts struct {

@@ -99,6 +99,13 @@ type (
 		RedeployAfterSync   bool                 `json:"redeployAfterSync" gorm:"column:redeploy_after_sync;default:false"`
 		PendingRedeploy     bool                 `json:"-" gorm:"column:pending_redeploy;not null;default:false"`
 
+		// InjectCommitEnv writes the synced commit into the project's env
+		// (ARCANE_GIT_COMMIT / ARCANE_GIT_COMMIT_SHORT / ARCANE_GIT_BRANCH) so the
+		// deployed application can report the commit it was deployed from. The
+		// keys are excluded from sync change detection, so a commit that leaves
+		// the synced files untouched does not force a redeploy.
+		InjectCommitEnv bool `json:"injectCommitEnv" gorm:"column:inject_commit_env;not null;default:false"`
+
 		BackupOnSave   bool `json:"backupOnSave" gorm:"column:backup_on_save;default:true"`
 		BackupPending  bool `json:"backupPending" gorm:"column:backup_pending;default:false"`
 		BackupConflict bool `json:"backupConflict" gorm:"column:backup_conflict;default:false"`

@@ -526,6 +526,7 @@ func (s *GitOpsSyncService) CreateSync(ctx context.Context, environmentID string
 	case mode == types.GitOpsSyncModeBackup &&
 		(change.Request.TargetType != "" && change.Request.TargetType != "project" ||
 			change.Request.SyncDirectory || change.Request.PullImageAfterSync || change.Request.RedeployAfterSync ||
+			change.Request.InjectCommitEnv ||
 			change.Submitted["composeOverridePath"] || change.Submitted["envContent"] ||
 			hasPreDeployConfig(change.Submitted)):
 		return nil, common.Classify(common.ErrValidation, &types.FieldError{Field: "mode", Err: errors.New("deployment options cannot be set on a backup sync")})
@@ -577,6 +578,7 @@ func (s *GitOpsSyncService) CreateSync(ctx context.Context, environmentID string
 		SyncDirectory:        change.Request.SyncDirectory,
 		PullImageAfterSync:   change.Request.PullImageAfterSync,
 		RedeployAfterSync:    change.Request.RedeployAfterSync,
+		InjectCommitEnv:      change.Request.InjectCommitEnv,
 		MaxSyncFiles:         kit.Ternary(change.Submitted["maxSyncFiles"], change.Request.MaxSyncFiles, defaultMaxFiles),
 		MaxSyncTotalSize:     kit.Ternary(change.Submitted["maxSyncTotalSize"], change.Request.MaxSyncTotalSize, defaultMaxTotalSize),
 		MaxSyncBinarySize:    kit.Ternary(change.Submitted["maxSyncBinarySize"], change.Request.MaxSyncBinarySize, defaultMaxBinarySize),
@@ -712,6 +714,7 @@ func (s *GitOpsSyncService) UpdateSync(ctx context.Context, environmentID, id st
 			change.Request.SyncDirectory ||
 			change.Request.PullImageAfterSync ||
 			change.Request.RedeployAfterSync ||
+			change.Request.InjectCommitEnv ||
 			hasPreDeployConfig(change.Submitted)):
 		return nil, common.Classify(common.ErrValidation, &types.FieldError{Field: "mode", Err: errors.New("deployment options cannot be set on a backup sync")})
 	}
@@ -774,6 +777,7 @@ func (s *GitOpsSyncService) UpdateSync(ctx context.Context, environmentID, id st
 		"syncDirectory":       {column: "sync_directory", value: change.Request.SyncDirectory},
 		"pullImageAfterSync":  {column: "pull_image_after_sync", value: change.Request.PullImageAfterSync},
 		"redeployAfterSync":   {column: "redeploy_after_sync", value: change.Request.RedeployAfterSync},
+		"injectCommitEnv":     {column: "inject_commit_env", value: change.Request.InjectCommitEnv},
 		"maxSyncFiles":        {column: "max_sync_files", value: change.Request.MaxSyncFiles},
 		"maxSyncTotalSize":    {column: "max_sync_total_size", value: change.Request.MaxSyncTotalSize},
 		"maxSyncBinarySize":   {column: "max_sync_binary_size", value: change.Request.MaxSyncBinarySize},

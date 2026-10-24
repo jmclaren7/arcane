@@ -41,6 +41,8 @@ import (
 //     assignment uniqueness by source), 092 (orphaned authorization records)
 //     and 093 (template registry icon_url), so the fork migration was
 //     renumbered an eighth time, to 094.
+//   - 094, before upstream claimed 094 (image_updates.latest_seen_at) and the
+//     fork migration was renumbered a ninth time, to 095.
 //
 // Goose keys its bookkeeping on the version number alone, so a database migrated
 // by a build from any of those windows is wrong in two ways: the upstream
@@ -57,26 +59,28 @@ import (
 // Postgres session lock, which is harmless: a second instance re-runs the same
 // checks and finds nothing to do, and the worst a genuine race can leave behind
 // is a duplicate version row, which Goose collapses when it reads its state. It
-// can be deleted once no database migrated by a pre-094 fork build is left in
+// can be deleted once no database migrated by a pre-095 fork build is left in
 // the wild.
 //
 // The 094 renumbering added a second failure mode that no earlier era had, and
 // it is dialect-specific. Upstream's SQLite 092 rebuilds gitops_syncs from an
 // explicit column list that cannot name inject_commit_env, so the Goose run
-// drops the column — and the operator's per-sync values with it — before 094
-// can re-add it. On SQLite the repair therefore lets 094 run for real and
-// restores the captured values afterwards; on Postgres, whose 092 is a plain
-// DELETE sweep, the column survives and 094 is recorded as applied as before.
+// drops the column — and the operator's per-sync values with it — before the
+// fork migration can re-add it. On SQLite the repair therefore lets the fork
+// migration run for real and restores the captured values afterwards; on
+// Postgres, whose 092 is a plain DELETE sweep, the column survives and the fork
+// migration is recorded as applied as before.
 const (
-	forkCommitEnvMigrationVersion             int64 = 94
-	forkCommitEnvDeduplicationRenumberVersion int64 = 90
-	forkCommitEnvRiskRenumberVersion          int64 = 88
-	forkCommitEnvBackupModeRenumberVersion    int64 = 85
-	forkCommitEnvApnsRenumberVersion          int64 = 77
-	forkCommitEnvLastRenumberVersion          int64 = 74
-	forkCommitEnvLateRenumberVersion          int64 = 73
-	forkCommitEnvMidRenumberVersion           int64 = 71
-	forkCommitEnvPreRenumberVersion           int64 = 69
+	forkCommitEnvMigrationVersion               int64 = 95
+	forkCommitEnvImageUpdateSeenRenumberVersion int64 = 94
+	forkCommitEnvDeduplicationRenumberVersion   int64 = 90
+	forkCommitEnvRiskRenumberVersion            int64 = 88
+	forkCommitEnvBackupModeRenumberVersion      int64 = 85
+	forkCommitEnvApnsRenumberVersion            int64 = 77
+	forkCommitEnvLastRenumberVersion            int64 = 74
+	forkCommitEnvLateRenumberVersion            int64 = 73
+	forkCommitEnvMidRenumberVersion             int64 = 71
+	forkCommitEnvPreRenumberVersion             int64 = 69
 )
 
 type sqlExecerInternal interface {
@@ -88,13 +92,14 @@ type sqlExecerInternal interface {
 // will skip the upstream migration that now owns that number, so the repair has
 // to replay it by hand.
 type forkCommitEnvRenumberErasInternal struct {
-	mid           bool // 71 — upstream's volume-workspace legacy key renames
-	late          bool // 73 — upstream's S3/system backup support
-	last          bool // 74 — upstream's GitOps pull/redeploy-after-sync flags
-	apns          bool // 77 — upstream's Apple push notification tables
-	backupMode    bool // 85 — upstream's GitOps backup mode
-	risk          bool // 88 — upstream's vulnerability risk scoring tables
-	deduplication bool // 90 — upstream's events.deduplication_key
+	mid             bool // 71 — upstream's volume-workspace legacy key renames
+	late            bool // 73 — upstream's S3/system backup support
+	last            bool // 74 — upstream's GitOps pull/redeploy-after-sync flags
+	apns            bool // 77 — upstream's Apple push notification tables
+	backupMode      bool // 85 — upstream's GitOps backup mode
+	risk            bool // 88 — upstream's vulnerability risk scoring tables
+	deduplication   bool // 90 — upstream's events.deduplication_key
+	imageUpdateSeen bool // 94 — upstream's image_updates.latest_seen_at
 }
 
 func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbProvider string, provider *goose.Provider, currentVersion, requiredVersion int64) error {
@@ -132,7 +137,7 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 	}
 
 	// Everything below the fork migration has to be applied first: recording
-	// version 94 below raises the Goose version past the intermediate
+	// version 95 below raises the Goose version past the intermediate
 	// migrations, after which UpTo would skip them.
 	belowForkVersion := forkCommitEnvMigrationVersion - 1
 	if currentVersion < belowForkVersion {
@@ -182,7 +187,7 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 
 	// The column the fork migration adds is already present, so record it as
 	// applied rather than re-running its DDL, which would fail on the duplicate
-	// column. When 092 dropped it, 094 is left for Goose to apply for real.
+	// column. When 092 dropped it, 095 is left for Goose to apply for real.
 	if forkColumnPresent {
 		if err := insertGooseMigrationVersionInternal(ctx, tx, dbProvider, forkCommitEnvMigrationVersion); err != nil {
 			return err
@@ -205,6 +210,7 @@ func repairPreRenumberForkMigrationInternal(ctx context.Context, db *sql.DB, dbP
 		"replayedBackupSupport", eras.late, "replayedPullRedeploy", eras.last, "replayedApns", eras.apns,
 		"replayedGitOpsBackupMode", eras.backupMode, "replayedVulnerabilityRisk", eras.risk,
 		"replayedEventDeduplication", eras.deduplication,
+		"replayedImageUpdateLatestSeen", eras.imageUpdateSeen,
 		"reappliedForkColumn", !forkColumnPresent, "restoredInjectCommitEnvSyncs", len(enabledSyncIDs))
 	return nil
 }
@@ -257,7 +263,7 @@ func reapplyForkCommitEnvColumnInternal(ctx context.Context, db *sql.DB, dbProvi
 }
 
 // recordedRenumberEraVersionsInternal reports which of the fork migration's old
-// version numbers (71, 73, 74, 77, 85, 88, 90) are recorded as applied — for
+// version numbers (71, 73, 74, 77, 85, 88, 90, 94) are recorded as applied — for
 // each, the signature of the corresponding renumber era whose skipped upstream
 // migration the repair has to replay by hand.
 func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProvider string) (forkCommitEnvRenumberErasInternal, error) {
@@ -273,6 +279,7 @@ func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProv
 		{forkCommitEnvBackupModeRenumberVersion, &eras.backupMode},
 		{forkCommitEnvRiskRenumberVersion, &eras.risk},
 		{forkCommitEnvDeduplicationRenumberVersion, &eras.deduplication},
+		{forkCommitEnvImageUpdateSeenRenumberVersion, &eras.imageUpdateSeen},
 	} {
 		applied, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, era.version)
 		if err != nil {
@@ -286,8 +293,9 @@ func recordedRenumberEraVersionsInternal(ctx context.Context, db *sql.DB, dbProv
 // forkCommitEnvReplayColumnsInternal carries the column lists the guarded replays
 // still have to add, computed before the repair transaction opens.
 type forkCommitEnvReplayColumnsInternal struct {
-	backupSupport []string
-	deduplication []string
+	backupSupport   []string
+	deduplication   []string
+	imageUpdateSeen []string
 }
 
 // missingReplayColumnsInternal probes the columns each recorded era's replay would
@@ -302,6 +310,11 @@ func missingReplayColumnsInternal(ctx context.Context, db *sql.DB, dbProvider st
 	}
 	if eras.deduplication {
 		if missing.deduplication, err = missingEventDeduplicationColumnsInternal(ctx, db, dbProvider); err != nil {
+			return forkCommitEnvReplayColumnsInternal{}, err
+		}
+	}
+	if eras.imageUpdateSeen {
+		if missing.imageUpdateSeen, err = missingImageUpdateLatestSeenColumnsInternal(ctx, db, dbProvider); err != nil {
 			return forkCommitEnvReplayColumnsInternal{}, err
 		}
 	}
@@ -338,6 +351,12 @@ func replaySkippedUpstreamMigrationsInternal(ctx context.Context, execer sqlExec
 			return err
 		}
 	}
+	// 094: image_updates.latest_seen_at.
+	if eras.imageUpdateSeen {
+		if err := replaySkippedImageUpdateLatestSeenInternal(ctx, execer, dbProvider, missing.imageUpdateSeen); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -369,6 +388,44 @@ func replaySkippedEventDeduplicationInternal(ctx context.Context, execer sqlExec
 	}
 	if _, err := execer.ExecContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_deduplication_key ON events (deduplication_key)"); err != nil {
 		return fmt.Errorf("failed to replay skipped event deduplication index: %w", err)
+	}
+	return nil
+}
+
+// missingImageUpdateLatestSeenColumnsInternal probes the one column upstream's
+// 094 adds, so the replay can skip it on a database that already has it.
+func missingImageUpdateLatestSeenColumnsInternal(ctx context.Context, db *sql.DB, dbProvider string) ([]string, error) {
+	var missing []string
+	present, err := columnExistsInternal(ctx, db, dbProvider, "image_updates", "latest_seen_at")
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		missing = append(missing, "latest_seen_at")
+	}
+	return missing, nil
+}
+
+// replaySkippedImageUpdateLatestSeenInternal replays upstream's 094: the new
+// column plus the backfill that stamps every row already flagged as having an
+// update. The backfill only runs when the column was actually added, so a
+// database that already carries it keeps the timestamps it recorded.
+func replaySkippedImageUpdateLatestSeenInternal(ctx context.Context, execer sqlExecerInternal, dbProvider string, missingColumns []string) error {
+	for _, column := range missingColumns {
+		if column != "latest_seen_at" {
+			continue
+		}
+		columnType := "DATETIME"
+		if dbProvider == dbProviderPostgres {
+			columnType = "TIMESTAMPTZ"
+		}
+		if _, err := execer.ExecContext(ctx, fmt.Sprintf("ALTER TABLE image_updates ADD COLUMN latest_seen_at %s", columnType)); err != nil {
+			return fmt.Errorf("failed to replay skipped image update latest_seen_at column: %w", err)
+		}
+		backfill := fmt.Sprintf("UPDATE image_updates SET latest_seen_at = CURRENT_TIMESTAMP WHERE has_update = %s", appliedLiteralInternal(dbProvider))
+		if _, err := execer.ExecContext(ctx, backfill); err != nil {
+			return fmt.Errorf("failed to replay skipped image update latest_seen_at backfill: %w", err)
+		}
 	}
 	return nil
 }
@@ -478,8 +535,8 @@ func missingBackupSupportColumnsInternal(ctx context.Context, db *sql.DB, dbProv
 }
 
 // hasPreRenumberForkMigrationStateInternal reports whether gitops_syncs.inject_commit_env
-// exists without version 90 being recorded — the signature of a fork build that applied
-// that migration under one of its old version numbers.
+// exists without the fork migration's current version being recorded — the signature of
+// a fork build that applied that migration under one of its old version numbers.
 func hasPreRenumberForkMigrationStateInternal(ctx context.Context, db *sql.DB, dbProvider string, currentVersion int64) (bool, error) {
 	if currentVersion < forkCommitEnvPreRenumberVersion {
 		return false, nil
@@ -531,6 +588,7 @@ func forkRenumberDamageDetectedInternal(ctx context.Context, db *sql.DB, dbProvi
 		{forkCommitEnvBackupModeRenumberVersion, "gitops_syncs", "mode"},
 		{forkCommitEnvRiskRenumberVersion, "vulnerability_risk_snapshots", "snapshot_date"},
 		{forkCommitEnvDeduplicationRenumberVersion, "events", "deduplication_key"},
+		{forkCommitEnvImageUpdateSeenRenumberVersion, "image_updates", "latest_seen_at"},
 	} {
 		applied, err := gooseMigrationVersionAppliedInternal(ctx, db, dbProvider, era.version)
 		if err != nil {

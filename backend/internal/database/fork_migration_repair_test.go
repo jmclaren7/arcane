@@ -26,7 +26,7 @@ func TestMigrateDatabase_RepairsPreRenumberForkMigrationState(t *testing.T) {
 		{name: "left at the pre-renumber version", reachedVersion: forkCommitEnvPreRenumberVersion},
 		// The database was started once on a later build whose fork migration failed:
 		// everything below it applied, the fork migration itself did not.
-		{name: "already advanced past 093", reachedVersion: forkCommitEnvMigrationVersion - 1},
+		{name: "already advanced past 094", reachedVersion: forkCommitEnvMigrationVersion - 1},
 	}
 
 	for _, testCase := range testCases {
@@ -58,7 +58,7 @@ func TestMigrateDatabase_RepairsPreRenumberForkMigrationState(t *testing.T) {
 			}
 
 			// The opt-in survives a repair that got to run first. In the advanced
-			// sub-case the migrations below 094 already ran without it, and
+			// sub-case the migrations below the fork's number already ran without it, and
 			// upstream's SQLite 092 rebuilt gitops_syncs before the repair could
 			// capture anything, so only the schema can be put back.
 			var injectCommitEnv bool
@@ -515,6 +515,16 @@ VALUES ('sync-1', 'lab', 'env-1', 'repo-1', 'main', 'compose.yaml', 'lab', CURRE
 	require.NoError(t, err)
 }
 
+func seedForkImageUpdateRowsInternal(t *testing.T, ctx context.Context, db *stdsql.DB) {
+	t.Helper()
+
+	_, err := db.ExecContext(ctx, `
+INSERT INTO image_updates (id, repository, tag, has_update, current_version, check_time)
+VALUES ('update-flagged', 'library/nginx', 'stable-alpine', TRUE, 'sha256:old', CURRENT_TIMESTAMP),
+       ('update-clean', 'library/alpine', '3.20', FALSE, 'sha256:current', CURRENT_TIMESTAMP)`)
+	require.NoError(t, err)
+}
+
 func sqliteTableExistsInternal(t *testing.T, db *stdsql.DB, table string) bool {
 	t.Helper()
 
@@ -561,7 +571,7 @@ func sqliteTableColumnsInternal(t *testing.T, db *stdsql.DB, table string) []str
 // treats upstream's 090 as applied and skips it). This era is also the first where
 // an upstream migration below the fork's new number *removes* the fork column:
 // SQLite's 092 rebuilds gitops_syncs from an explicit column list, so the repair
-// has to let 094 run for real and restore the operator's per-sync values.
+// has to let the fork migration run for real and restore the operator's per-sync values.
 func TestMigrateDatabase_RepairsDeduplicationRenumberForkMigrationState(t *testing.T) {
 	ctx := context.Background()
 	rawDB, dsn := newSQLiteSQLDB(t, t.TempDir(), "arcane-dedup-renumber.db")
@@ -587,7 +597,7 @@ func TestMigrateDatabase_RepairsDeduplicationRenumberForkMigrationState(t *testi
 	}
 
 	// Upstream's SQLite 092 rebuilds gitops_syncs without inject_commit_env, so this
-	// is the assertion that proves the repair re-applied 094 and put the values back.
+	// is the assertion that proves the repair re-applied 095 and put the values back.
 	var injectCommitEnv bool
 	require.NoError(t, rawDB.QueryRow(`SELECT inject_commit_env FROM gitops_syncs WHERE id = 'sync-1'`).Scan(&injectCommitEnv))
 	assert.True(t, injectCommitEnv)
@@ -603,6 +613,67 @@ func seedDeduplicationRenumberForkDatabaseInternal(t *testing.T, ctx context.Con
 	require.NoError(t, migrateDatabase(ctx, db, dbProviderSQLite, MigrationOptions{}, forkCommitEnvDeduplicationRenumberVersion-1))
 	applyForkCommitEnvMigrationInternal(t, ctx, db, forkCommitEnvDeduplicationRenumberVersion)
 	seedForkGitOpsSyncRowInternal(t, ctx, db)
+}
+
+// TestMigrateDatabase_RepairsImageUpdateSeenRenumberForkMigrationState reproduces the
+// databases produced by fork builds between the 2026-10-10 and 2026-10-24 rebases,
+// which applied the GitOps commit-injection migration as version 94 — the number
+// upstream later gave to 094_add_image_update_latest_seen_at.sql. Such a database has
+// inject_commit_env already and lacks image_updates.latest_seen_at (because Goose
+// treats upstream's 094 as applied and skips it). Unlike the 090 era, SQLite's 092 ran
+// before the fork migration here, so the column and its values survive the Goose run
+// and the repair records the fork migration as applied rather than re-running it.
+func TestMigrateDatabase_RepairsImageUpdateSeenRenumberForkMigrationState(t *testing.T) {
+	ctx := context.Background()
+	rawDB, dsn := newSQLiteSQLDB(t, t.TempDir(), "arcane-image-update-seen-renumber.db")
+	seedImageUpdateSeenRenumberForkDatabaseInternal(t, ctx, rawDB)
+
+	// Goose keys on the version number alone, so upstream's 094 was skipped.
+	require.Equal(t, forkCommitEnvImageUpdateSeenRenumberVersion, readGooseSQLiteVersion(t, dsn))
+	assert.False(t, sqliteColumnExistsInternal(t, rawDB, "image_updates", "latest_seen_at"))
+
+	require.NoError(t, migrateDatabase(ctx, rawDB, dbProviderSQLite, MigrationOptions{}, latestMigrationVersion))
+
+	highestVersion, err := getHighestEmbeddedMigrationVersionInternal(dbProviderSQLite)
+	require.NoError(t, err)
+	assert.Equal(t, highestVersion, readGooseSQLiteVersion(t, dsn))
+
+	// Upstream's 094, which the stale bookkeeping made Goose skip, must have been
+	// replayed, and the repaired schema must match a from-scratch migration.
+	freshDB, _ := newSQLiteSQLDB(t, t.TempDir(), "arcane-fresh-image-update-seen.db")
+	require.NoError(t, migrateDatabase(ctx, freshDB, dbProviderSQLite, MigrationOptions{}, latestMigrationVersion))
+	for _, table := range []string{"image_updates", "gitops_syncs", "events", "settings"} {
+		assert.Equal(t, sqliteTableColumnsInternal(t, freshDB, table), sqliteTableColumnsInternal(t, rawDB, table),
+			"repaired schema for %s differs from a database migrated from scratch", table)
+	}
+
+	// The backfill upstream's 094 performs must have run for the rows already flagged
+	// as having an update, and left the others alone.
+	var flaggedSeenAt stdsql.NullString
+	require.NoError(t, rawDB.QueryRow(`SELECT latest_seen_at FROM image_updates WHERE id = 'update-flagged'`).Scan(&flaggedSeenAt))
+	assert.True(t, flaggedSeenAt.Valid)
+	var cleanSeenAt stdsql.NullString
+	require.NoError(t, rawDB.QueryRow(`SELECT latest_seen_at FROM image_updates WHERE id = 'update-clean'`).Scan(&cleanSeenAt))
+	assert.False(t, cleanSeenAt.Valid)
+
+	// SQLite's 092 ran before the fork migration in this era, so the opt-in is
+	// carried through untouched rather than captured and restored.
+	var injectCommitEnv bool
+	require.NoError(t, rawDB.QueryRow(`SELECT inject_commit_env FROM gitops_syncs WHERE id = 'sync-1'`).Scan(&injectCommitEnv))
+	assert.True(t, injectCommitEnv)
+
+	// Running again is a no-op rather than a second repair.
+	require.NoError(t, migrateDatabase(ctx, rawDB, dbProviderSQLite, MigrationOptions{}, latestMigrationVersion))
+	assert.Equal(t, highestVersion, readGooseSQLiteVersion(t, dsn))
+}
+
+func seedImageUpdateSeenRenumberForkDatabaseInternal(t *testing.T, ctx context.Context, db *stdsql.DB) {
+	t.Helper()
+
+	require.NoError(t, migrateDatabase(ctx, db, dbProviderSQLite, MigrationOptions{}, forkCommitEnvImageUpdateSeenRenumberVersion-1))
+	applyForkCommitEnvMigrationInternal(t, ctx, db, forkCommitEnvImageUpdateSeenRenumberVersion)
+	seedForkGitOpsSyncRowInternal(t, ctx, db)
+	seedForkImageUpdateRowsInternal(t, ctx, db)
 }
 
 // getHighestEmbeddedMigrationVersionInternal returns the newest embedded migration

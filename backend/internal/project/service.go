@@ -206,6 +206,7 @@ func (s *ProjectService) EnsureGitOpsProjectLinked(ctx context.Context, gitOpsSy
 		BackupFailureReason:    gitOpsSync.BackupFailureReason,
 		LastBackupAt:           gitOpsSync.LastBackupAt,
 		LastBackupSnapshot:     gitOpsSync.LastBackupSnapshot,
+		InjectCommitEnv:        gitOpsSync.InjectCommitEnv,
 	}
 	*project = Project{ //exhaustruct:enforce
 		BaseModel:          project.BaseModel,

@@ -211,10 +211,37 @@ When you rebase, work through every entry below. For each one:
 > so that set is down to one. `svelte-check` **0 errors / 0 warnings across 735
 > files**; `eslint` clean over `frontend`; `tsc --noEmit` clean over `tests`; and
 > `vp fmt --check .` clean over the repository (1154 files). `golangci-lint`
-> still **could not** be run locally and is left to CI, as at the last four
-> rebases: the released 2.5.0 build refuses a go1.27.3 target, and building it
-> from source with the local toolchain does not help — the check reads
-> golangci-lint's own `go` directive (1.24), not the toolchain that compiled it.
+> still **could not** be run locally, as at the last four rebases: the released
+> 2.5.0 build refuses a go1.27.3 target, and building it from source with the
+> local toolchain does not help — the check reads golangci-lint's own `go`
+> directive (1.24), not the toolchain that compiled it.
+>
+> **And "left to CI" turned out not to mean "verified".** Reading CI's own
+> result for the first time this cycle shows the fork's `Go Linter (backend)`
+> job has been **failing on every push to `main` for at least four cycles**, and
+> that **all 38 reported issues are in fork-only code** — upstream's side is
+> clean. The inventory at `09506642d`: one `exhaustruct_v5` (change #7's
+> `InjectCommitEnv` missing from `EnsureGitOpsProjectLinked`'s enforced
+> `GitOpsSync` literal — **fixed this cycle**, see change #7), ten `forbidigo`
+> (`context.Background()` instead of `t.Context()` in
+> `fork_migration_repair_test.go`), five `gocritic` (three
+> `sprintfQuotedString` wanting `%q` in `fork_migration_repair.go`, two
+> `importShadow` from `var sync` in `internal/gitops/service_test.go` and
+> `internal/project/service_test.go`), sixteen `govet` `shadow` of `err` in
+> `fork_migration_repair.go`, three `lll` over 200 characters
+> (`fork_migration_repair.go:329` and `:514`, and
+> `syncProjectDirectory`'s signature at `children/sync/service.go:495`, which
+> change #7's `commitHash` parameter pushed over), two `perfsprint` and one
+> `unparam`, the last three also in change #8's files. The job additionally
+> reports `Timeout exceeded` after 317s on `ubuntu-latest` (upstream runs this
+> on depot runners), so **the list may be incomplete** — expect more once the
+> reported ones are gone. Thirty-three of the thirty-eight are change #8's
+> self-inflicted debt, which is one more argument for its deletion criterion.
+> **None of this was fixed this cycle beyond the exhaustruct one**: the fixes
+> cannot be verified locally, they sit in a startup database-repair path, and
+> they are not the rebase's work. Treat them as their own task, and from now on
+> **read the `Go Linter (backend)` job after each force push** rather than
+> recording golangci-lint as "left to CI" and moving on.
 > `gocognit` was not re-run either (the tool could not be fetched in this
 > container), which is sound only because `backend/internal/database/` is
 > unchanged; re-measure the next time an era is added.
@@ -1554,6 +1581,20 @@ When you rebase, work through every entry below. For each one:
   switch labels' classes too: upstream's `shadcn/no-restyle` rule (added at
   `09e786e58`) rejects typography and color on `<Label>`, and only
   `pnpm -C frontend run lint` catches that.
+  **A new field on `GitOpsSync` has one more place to reach than it looks.**
+  `ProjectService.EnsureGitOpsProjectLinked`
+  (`backend/internal/project/service.go`) rebuilds `*gitOpsSync` from a
+  field-by-field `GitOpsSync{ //exhaustruct:enforce }` literal, and
+  `InjectCommitEnv` was missing from it from the day the field was added until
+  the `3d459173c` rebase — so every call silently reset the in-memory flag to
+  `false`. No reader was affected in practice (both injection callsites read the
+  flag _before_ the link runs, and `PerformSync` reloads the row from the
+  database anyway), which is exactly why it went unnoticed for nine cycles: only
+  `golangci-lint`'s `exhaustruct_v5` ever reported it, and CI's report was not
+  being read. It is now set from `gitOpsSync.InjectCommitEnv` like every
+  neighbouring field. When upstream adds a field to that literal, or the fork
+  adds another of its own, re-grep for `//exhaustruct:enforce` literals over
+  `GitOpsSync` rather than trusting the build.
 - **Redundancy check:** Upstream has no commit-injection option; its GitOps sync
   writes only the repository's own env content — **keep**.
 
@@ -1687,6 +1728,16 @@ When you rebase, work through every entry below. For each one:
   first with zero changes. `repairPreRenumberForkMigrationInternal` therefore
   still measures `gocognit` **25**; it was not re-measured, which is only sound
   because the file is unchanged.
+
+  **This file carries the fork's whole `golangci-lint` debt, too.** Of the 38
+  issues the `Go Linter (backend)` job reports at `09506642d`, **33 are in
+  `fork_migration_repair.go` and its test** — sixteen `govet` `shadow` of `err`,
+  ten `forbidigo` `context.Background()` in tests, three `gocritic`
+  `sprintfQuotedString`, two `lll`, two `perfsprint` and one `unparam`. They are
+  mechanical, but they are unverifiable locally (no golangci-lint build targets
+  go1.27.3) and they sit in a startup database-repair path, so they have not
+  been fixed as part of a rebase. One more reason to meet the deletion criterion
+  below rather than keep paying for this file.
 
   **Delete the whole thing** — repair, constants, the tests, and the README's
   closing sentence about it — once no pre-094 database is left running, which for

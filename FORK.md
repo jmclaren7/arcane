@@ -75,7 +75,8 @@ When you rebase, work through every entry below. For each one:
    `919bd842e` it was `internal/gitops`'s
    `TestGitOpsBackup_DeletingProjectRemovesBackupSync` and
    `pkg/utils/notifications`'s two `TestBuildSignalURL` tests, neither of which
-   the fork touches. The cheapest way to check is
+   the fork touches; at `3d459173c` the `TestBuildSignalURL` pair passes again
+   and the set is down to the `internal/gitops` one alone. The cheapest way to check is
    `git archive upstream/main | tar -x -C <tmpdir>` and run the same packages
    there. A fourth class joined at
    `a509628d4`, and only `go vet`/`go test` sees it: upstream's refactors
@@ -90,134 +91,169 @@ When you rebase, work through every entry below. For each one:
 4. Keep this file in sync: update the "Last rebased onto" marker, and move
    entries between the "Active" and "Superseded" sections as upstream evolves.
 
-> **Last rebased onto upstream:** `919bd842e` — _chore: bump deps_, on
-> 2026-10-24.
-> _(Previously `a509628d4`, 2026-10-17.)_
+> **Last rebased onto upstream:** `3d459173c` — _chore: use depot builder_, on
+> 2026-10-31.
+> _(Previously `919bd842e`, 2026-10-24.)_
 >
-> This rebase carried **62 new upstream commits**, spanning the **2.17.0
-> release**. **One entry went upstream outright** — the build-on-pull-failure
-> fallback (was #11) — leaving **twelve active**, and the single structural
-> event was a migration collision: upstream's `c8fda2bd4` claimed `094`, so
-> change #7's migration moved to `095` and change #8 grew its **ninth era**.
-> The batch's themes were a **native Podman runtime** (`fd125ecc8`, `7f06db125`),
-> a rework of the **Docker boundary and image ownership** (`fd742f3ee`), a long
+> This rebase carried **34 new upstream commits**, spanning the **2.17.1
+> release**. **No entry was superseded, so all twelve stay active**, and for only
+> the second time since `41eae633` there was **no migration collision at all**:
+> upstream added no migration this cycle, so change #7's migration keeps `095`
+> and change #8 gains no tenth era. The batch's own theme was a
+> **security-scanning push** — CodeQL for Go, JavaScript/TypeScript and Actions
+> (`d7abab500`, `b73b16dc9`) and Trivy scans of the manager and agent images
+> (`1d06f8a99`), both as **new workflows under `.github/workflows/`** — alongside
+> a continuation of the 4xx-instead-of-500 sweep (`df92fd30f`, `d54c253a6`,
+> `ad0f7d8f8`, `91eef67d8`), proxied request bodies kept readable for the agent
+> (`3974cb700`), the Scalar API reference served from the frontend rather than a
+> CDN (`a4812b9d5`), project images built before a post-Git-sync redeploy
+> (`76cb3ce8f`), digest-pinned images skipping stored update state (`236974ea3`),
+> manual updater runs ignoring update opt-outs (`819076c59`), orphaned job-run
+> activities resolved at startup (`5f9394e39`), a warning for deprecated Arcane
+> images (`6d05562c3`), and the usual dependency and Crowdin churn.
+>
+> **Three entries needed work:**
+>
+> 1. **Change #3 gained two new upstream workflows to adapt, and they are the
+>    first that actually fire on the fork.** `d7abab500`/`b73b16dc9` added
+>    `.github/workflows/codeql.yml` and `1d06f8a99` added
+>    `.github/workflows/trivy.yml`. Both run on `depot-ubuntu-latest`, and —
+>    unlike `release.yml`, which is `workflow_dispatch`-only and is why the entry
+>    could leave it alone — both trigger on **push and pull_request to `main`**,
+>    so on the fork they would have failed on every push. They take the entry's
+>    standard transformation: runners to `ubuntu-latest`, and for Trivy's image
+>    build `depot/setup-action` + `depot/build-push-action` replaced by
+>    `docker/setup-buildx-action` + `docker/build-push-action` with `load: true`
+>    kept and `type=gha` layer caching added, since the fork has no depot cache.
+>    CodeQL needed nothing beyond the runner swap: its Go build is already
+>    `go build -tags exclude_frontend ./backend/... ./cli/... ./types/...`, which
+>    needs no `frontend/dist`. Both keep upstream's schedules and their
+>    SHA-pinned `github/codeql-action` and `aquasecurity/trivy-action` steps.
+>    Note that uploading SARIF needs `security-events: write`, which is free on a
+>    public fork — if the fork ever goes private, both workflows stop reporting
+>    and should be dropped rather than debugged. `ci.yml` itself took only the
+>    usual **modify/delete** on `cli-e2e-tests` (upstream's `2b7f10f9b` bumped
+>    `voidzero-dev/setup-vp` to v1.22.0 inside the job the fork deletes),
+>    resolved by keeping the fork's deletion; the fork's **two** surviving
+>    `setup-vp` steps inherited the same digest
+>    (`cab1ab9eaff52d4857875f4f2c016e36af8f2c76`). While in the area,
+>    `build-next-images.yml`'s `actions/checkout` and `docker/login-action` were
+>    put back on upstream's verified digests
+>    (`3d3c42e5aac5ba805825da76410c181273ba90b1` # v7.0.1 and
+>    `81c6f93d4bc991e510b342a00b419b3bb4efc5c6` # v4.7.0) — this entry has
+>    claimed they were pinned since the `5feb10bf` rebase, but the file had in
+>    fact been on floating `@v7.0.0` / `@v4.4.0` tags the whole time. Re-check
+>    that claim against the file, not against this note.
+> 2. **Change #7's directory-sync callsite moved onto upstream's staging
+>    context.** `76cb3ce8f` _(fix: build project images before redeploying after
+>    Git sync (#4611))_ gave `PerformSync` a separate
+>    `stageCtx` (`context.WithTimeout(ctx, sourceTimeout)`), and upstream
+>    switched `syncProjectDirectory(ctx, …)` to
+>    `syncProjectDirectory(stageCtx, …)` in the same statement where the fork
+>    adds `source.commitHash`. That is a plain two-sided conflict on one line:
+>    the resolution is upstream's `stageCtx` with the fork's extra argument.
+>    Nothing else in the entry moved, and because upstream shipped no migration
+>    the `095` files and change #8 were untouched — `backend/internal/database/`
+>    came out of this rebase **byte-identical** to its pre-rebase state, so
+>    `repairPreRenumberForkMigrationInternal` still measures `gocognit` **25**
+>    without re-measuring.
+> 3. **Change #12's updater half had to absorb upstream's new opt-out bypass.**
+>    `819076c59` _(fix: ignore update opt-outs for manual updater runs (#4564))_
+>    threads an `ignoreSettingsExclusionsKey{}` context flag through
+>    `collectUsedImagesFromContainers` and `collectUsedImagesFromProjects`, so a
+>    manual run ignores the label opt-out **and** the settings exclusion list.
+>    Both halves conflicted with the fork's filter. The resolution keeps
+>    upstream's flag and the fork's filter together: `updateFilter`/
+>    `composeUpdateFilter` are fetched as before, and **both** `Excludes` calls
+>    are now gated on `!ignoreOptOuts`. Gating them is the point, not an
+>    accident — the filter is the mode-aware reading of exactly the list
+>    upstream's flag exists to bypass, so leaving it ungated would have made a
+>    manual run bypass the list in exclude mode while still being confined to the
+>    allowlist in include mode. The same conflict also removed the last stale
+>    `if s.deps.Settings != nil` guard in that file, which upstream's own
+>    unguarded `s.deps.Settings` calls around it had already made inconsistent;
+>    `SettingsService.ContainerAutoUpdateFilter`'s nil-receiver guard is what
+>    makes that safe, and it still must not be tidied away.
+>
+> The rest replayed with zero conflicts, and each entry's redundancy check was
+> re-verified against `3d459173c`: upstream's `sync-table.svelte` still toasts on
+> any 2xx behind one `isLoading.syncing` flag (#4), still renders raw full hashes
+> (#5), still ships the `isSecure` disabled-button-with-tooltip fallback in
+> `copy-button.svelte` (#6), still has no commit injection (#7), no detach or
+> orphan reconcile (#11), no include mode (#12), and still watches its own
+> scratch directories and WARNs "Default admin user not found" unconditionally
+> (#10). The mandatory re-greps came back clean for the second rebase running:
+> the only `ExcludedContainerNameSet` / `ContainerNameExcluded` callers are
+> inside `internal/settings/container_filter.go`,
+> `UpdaterService.ExcludedContainers` is still the only implementation of the
+> updater engine's `SettingsProvider` port, the only new
+> `autoUpdateExcludedContainers` references are two upstream
+> `internal/dashboard/service_test.go` cases that exercise the default
+> (exclusion) mode and need nothing, and **no new `nginx:stable-alpine` site**
+> appeared in `tests/` — all five fixture sites plus the workflow prefetch are
+> still on `mirror.gcr.io`, with `TEST_IMAGE_REFS.nginx` still deliberately on
+> `public.ecr.aws` because that block only queries registry metadata.
+> Re-verified that `mirror.gcr.io` serves `library/nginx:stable-alpine` and
+> `library/alpine:3.20` anonymously (manifest HTTP 200 for both).
+>
+> Verified post-rebase: `go build -tags exclude_frontend ./...` and
+> `go vet -tags exclude_frontend ./...` clean over `backend`, and
+> `go build`/`go vet` clean over `cli` and `types`; `go fmt ./...` reports
+> nothing across all three modules (use the Go 1.27.3 toolchain's own `gofmt` via
+> `go fmt` — the container's `gofmt` on `PATH` cannot parse upstream's generic
+> methods); the full `go test -tags=exclude_frontend,buildables ./...` green for
+> all three modules except one package that fails on **pristine upstream too** in
+> a container with no Docker daemon and with no fork involvement —
+> `internal/gitops`'s `TestGitOpsBackup_DeletingProjectRemovesBackupSync` ("dial
+> unix /var/run/docker.sock"), confirmed by running the same test in a
+> `git archive upstream/main` tree. Last cycle's other pristine-upstream
+> failures, `pkg/utils/notifications`'s two `TestBuildSignalURL` tests, now pass,
+> so that set is down to one. `svelte-check` **0 errors / 0 warnings across 735
+> files**; `eslint` clean over `frontend`; `tsc --noEmit` clean over `tests`; and
+> `vp fmt --check .` clean over the repository (1154 files). `golangci-lint`
+> still **could not** be run locally and is left to CI, as at the last four
+> rebases: the released 2.5.0 build refuses a go1.27.3 target, and building it
+> from source with the local toolchain does not help — the check reads
+> golangci-lint's own `go` directive (1.24), not the toolchain that compiled it.
+> `gocognit` was not re-run either (the tool could not be fetched in this
+> container), which is sound only because `backend/internal/database/` is
+> unchanged; re-measure the next time an era is added.
+>
+> Earlier rebase (`919bd842e` — _chore: bump deps_, 2026-10-24; previously
+> `a509628d4`, 2026-10-17): carried **62 new upstream commits**, spanning the
+> **2.17.0 release**. **One entry went upstream outright** — the
+> build-on-pull-failure fallback (was #11), superseded by `a78129075`, which
+> rewrote the `buildEnabled` branch of `DecideDeployImageAction` and deleted the
+> two dead policy arms the entry worked around — leaving **twelve active**. The
+> structural event was a migration collision: `c8fda2bd4` claimed `094`, so
+> change #7's migration moved to `095` and change #8 grew its **ninth era**, the
+> cheapest shape so far (upstream's `094` is its own ceiling, so the replay stays
+> after the Goose `UpTo`, and on an era-`94` database SQLite's `092` ran long
+> before the fork migration so the column and its values survive). The batch's
+> themes were a **native Podman runtime** (`fd125ecc8`, `7f06db125`), a rework of
+> the **Docker boundary and image ownership** (`fd742f3ee`), a long
 > stability/hardening sweep (`a78129075`, `c2d8e8d6c`, `0e0a1d1fd`, `10ee66bbc`,
 > `edb390d61`, `dac409fc3`, `b31fae3c7`), per-project rather than global update
 > locking (`c8ab0db42`, `4c98ef8f3`), 4xx instead of 500/200 for not-found and
 > conflict (`efc38c1d8`), notification email templates **inlined into Go**
 > (`5b8c14016`, which deleted the `email-templates` workspace), the Justfile
-> converted to **just modules** (`a11074701`), Go 1.27.3 (`099161137`),
-> vite-plus 1.3.0 (`c774cb60f`) and the usual dependency and Crowdin churn.
->
-> **Six entries needed work:**
->
-> 1. **Change #11 is superseded and was dropped.** Upstream's `a78129075`
->    rewrote the `buildEnabled` branch of `DecideDeployImageAction` to set
->    `FallbackBuildOnPullFail` for `always`, for the refresh windows and for the
->    `default`/`missing` case, and **deleted** the two dead `case policy ==
->    "missing"` / `case policy == ""` arms the entry existed to work around.
->    Upstream's own `TestDecideDeployImageAction` even gained the
->    deploy-override case the entry called the one that guards the real bug, so
->    the fork's tests are redundant too. The replay surfaced this as a
->    one-statement formatting conflict in a file whose _other_ hunks had all
->    merged away to nothing — which is what a fully superseded change looks like
->    from inside a rebase. The commit was skipped; the entry moved to
->    "Superseded / now upstream".
-> 2. **The fork migration renumbered a ninth time, `094` → `095`, and change #8
->    gained a ninth era.** `c8fda2bd4`'s auto-update delay shipped
->    `094_add_image_update_latest_seen_at.sql`, which collided with the fork's
->    `094_add_gitops_sync_inject_commit_env.sql` in both dialects. This is the
->    cheapest era so far: upstream's `094` is its own ceiling, so nothing above
->    it can trip the Goose `UpTo` and the replay stays in the after-`UpTo`
->    stage; and on an era-`94` database SQLite's `092` ran long before the fork
->    migration, so `inject_commit_env` and its values survive and the repair
->    records `095` as applied rather than re-running it. The replay splits
->    `DATETIME`/`TIMESTAMPTZ`, reuses `appliedLiteralInternal` for the
->    `has_update = 1`/`= true` backfill predicate, and **runs the backfill only
->    when it actually added the column**, so a database that already carries it
->    keeps its own timestamps. `repairPreRenumberForkMigrationInternal` still
->    measures `gocognit` **25** against CI's cap of 40.
-> 3. **Change #12's updater half was re-derived onto upstream's new Docker
->    boundary.** `fd742f3ee` replaced the updater service's direct
->    `s.DockerClient(ctx)` calls with `s.deps.Docker.Call(ctx, func(ctx,
->    *client.Client) (T, error))`. `collectUsedImagesFromContainers` conflicted
->    head-on: upstream's side had the `Call` wrapper plus an inline
->    `docker.ExcludedContainerNameSet(…)`, the fork's had the old client plus
->    `ContainerAutoUpdateFilter`. The resolution is upstream's boundary with the
->    fork's filter, and `UpdaterService.ExcludedContainers` was moved onto
->    `Docker.Call` in the same spirit — `DockerClient` still exists, but only as
->    upstream's `updater.DockerClientProvider` implementation.
-> 4. **Change #12's Jobs-tab half gained an upstream neighbour.** `c8fda2bd4`
->    inserted an `auto-update-delay` block at the top of the
->    `autoUpdateSettings` snippet, directly above the excluded-containers
->    `<Label>` the fork wraps in a flex row with the include-mode `<Switch>`.
->    Upstream's block goes first, the fork's mode-aware row below it; the
->    auto-heal half merged clean.
-> 5. **Change #3's `ci.yml` took the usual modify/delete.** `4056207af`
->    _(chore: simplify e2e test jobs (#4522))_ removed the `proxy` entry from
->    the `e2e-tests` database matrix and re-pointed `cli-e2e-tests` at
->    `setup/compose.yaml` / port 3000. The fork inherits the matrix removal — it
->    runs two E2E jobs now, sqlite and postgres — and the `cli-e2e-tests` half
->    resolved by keeping the fork's deletion of the whole job. No action pin
->    moved, so neither workflow needed a digest bump; the
->    `&go-cache-dependencies` anchor is still defined in `go-tests` and used by
->    `go-linter`, so dropping the job again leaves it resolvable.
-> 6. **Both documentation entries needed a line.** Change #1's README banner
->    went from "four small self-contained features" to **three** with #11 going
->    upstream. Change #2's Optional prerequisites lost their `golangci-lint`
->    bullet: `a11074701` dropped upstream's `gci`/`gofumpt` install block and
->    made **`golangci-lint` v2 a Required prerequisite** instead, so the fork's
->    bullet had become a duplicate of an upstream one.
->
-> The rest replayed with zero conflicts, and each entry's redundancy check was
-> re-verified against `919bd842e`: upstream's `sync-table.svelte` still toasts
-> on any 2xx behind one `isLoading.syncing` flag (#4), still renders raw full
-> hashes (#5), still ships the `isSecure` disabled-button-with-tooltip fallback
-> in `copy-button.svelte` (#6), still has no commit injection (#7), no detach or
-> orphan reconcile (#11), no include mode (#12), and still watches its own
-> scratch directories and WARNs "Default admin user not found" unconditionally
-> (#10) — note `467425089` _(fix: exclude gitops scratch clones from system
-> backups (#4519))_ excludes those directories from **backups**, not from the
-> filesystem watcher, so #10's watcher bullet stands. The mandatory re-greps
-> both came back clean for the first time in four rebases: no new reader of
-> `autoUpdateExcludedContainers`, `ExcludedContainerNameSet` or
-> `ContainerNameExcluded` outside `internal/settings/container_filter.go` (the
-> one new reference, in `internal/imageupdate/service_test.go`, is an upstream
-> test asserting the list must _not_ reach the checker), and **no new
-> `nginx:stable-alpine` site** in `tests/` — all six pull sites are still on
-> `mirror.gcr.io`, with `TEST_IMAGE_REFS.nginx` still deliberately on
-> `public.ecr.aws` because that block only queries registry metadata.
->
-> One incidental change: upstream's vite-plus bump to 1.3.0 (`c774cb60f`)
-> changed the markdown formatter's emphasis style, so `vp fmt` rewrote every
-> `*italic*` in this file to `_italic_`. That is the formatter's output and was
-> kept. Upstream's generated `.arcane.json` and `CHANGELOG.md` are **not**
-> `vp fmt` clean (tabs, trailing blank line); they are regenerated by upstream
-> tooling, so they were reverted rather than committed as fork drift — do the
-> same next time rather than letting `vp fmt .` claim them.
->
-> Verified post-rebase: `go build -tags exclude_frontend ./...` and `go vet
-> -tags exclude_frontend ./...` clean over `backend`, and `go build`/`go vet`
-> clean over `cli` and `types`; `go fmt ./...` reports nothing across all three
-> modules (use the Go 1.27.3 toolchain's own `gofmt` via `go fmt` — the
-> container's `gofmt` on `PATH` cannot parse upstream's generic methods and
-> reports nine false "method must have no type parameters"); the full
-> `go test -tags=exclude_frontend,buildables ./...` green for all three modules
-> except two packages that fail on **pristine upstream too** in a container with
-> no Docker daemon and no fork involvement —
-> `internal/gitops`'s `TestGitOpsBackup_DeletingProjectRemovesBackupSync`
-> ("failed to bring down project: … dial unix /var/run/docker.sock") and
-> `pkg/utils/notifications`'s `TestBuildSignalURL` /
-> `TestBuildSignalURL_PhoneNumberEncoding` (an upstream signal-URL builder that
-> stopped emitting its `source=`/`recipients=`/`port=` query parameters);
-> `svelte-check` **0 errors / 0 warnings across 735 files**; `eslint` clean over
-> `frontend`; `tsc --noEmit` clean over `tests`; and `vp fmt` clean over the
-> repository. The `email-templates` workspace is gone with `5b8c14016`, so it is
-> no longer part of this list. `golangci-lint` still **could not** be run
-> locally and is left to CI, as at the last three rebases: the released 2.5.0
-> build refuses a go1.27.3 target, and building it from source with the local
-> toolchain does not help — the check reads golangci-lint's own `go` directive
-> (1.24), not the toolchain that compiled it.
+> converted to **just modules** (`a11074701`), Go 1.27.3 (`099161137`) and
+> vite-plus 1.3.0 (`c774cb60f`). Six entries needed work: change #12's updater
+> half was re-derived onto upstream's new `Docker.Call` boundary (upstream's
+> wrapper with the fork's filter, and `UpdaterService.ExcludedContainers` moved
+> onto it too); change #12's Jobs-tab half took `c8fda2bd4`'s `auto-update-delay`
+> block above the fork's mode-aware excluded-containers row; change #3's `ci.yml`
+> took the usual `cli-e2e-tests` modify/delete from `4056207af` and inherited its
+> removal of the `proxy` E2E matrix entry, leaving two E2E jobs; and both
+> documentation entries needed a line — the README banner went from "four small
+> self-contained features" to **three**, and the Optional prerequisites lost
+> their `golangci-lint` bullet once `a11074701` made it a Required one upstream.
+> One incidental change: vite-plus 1.3.0 changed the markdown formatter's
+> emphasis style, so `vp fmt` rewrote every `*italic*` in this file to
+> `_italic_`; that is the formatter's output and was kept. Upstream's generated
+> `.arcane.json` and `CHANGELOG.md` are **not** `vp fmt` clean (tabs, trailing
+> blank line); they are regenerated by upstream tooling, so revert them rather
+> than letting `vp fmt .` claim them as fork drift.
 >
 > Earlier rebase (`a509628d4` — _fix: use the opened resource's environment in
 > the tab title with all environments enabled (#4450)_, 2026-10-17; previously
@@ -1159,7 +1195,9 @@ When you rebase, work through every entry below. For each one:
 
 ### 3. CI/workflows adapted for this fork
 
-- **Files:** `.github/workflows/ci.yml`, `.github/workflows/build-next-images.yml`
+- **Files:** `.github/workflows/ci.yml`,
+  `.github/workflows/build-next-images.yml`, `.github/workflows/codeql.yml`,
+  `.github/workflows/trivy.yml`
 - **Intent:** Make CI run on a fork without upstream-only
   infrastructure:
   - Run on the `main` branch (CI on push/PR; next images on push to
@@ -1171,6 +1209,11 @@ When you rebase, work through every entry below. For each one:
     release, cosign signing, depot test reporting.
   - Drop the `deadcode` and `cli-e2e-tests` jobs (gated on the `getarcaneapp`
     owner / depot secrets).
+  - Give upstream's security-scanning workflows the same treatment where they
+    fire on a fork: `codeql.yml` and `trivy.yml` run on `ubuntu-latest`, and
+    Trivy's image build uses `docker/setup-buildx-action` +
+    `docker/build-push-action` with `type=gha` caching instead of the depot
+    builder.
   - Build & push with `docker/build-push-action` to
     `ghcr.io/<owner>/arcane` and `ghcr.io/<owner>/arcane-agent` (tag `next`),
     dropping the upstream `manager`/`arcane-headless`/`agent` image
@@ -1252,10 +1295,35 @@ When you rebase, work through every entry below. For each one:
   **modify/delete conflict**, resolved by keeping the fork's deletion of the
   whole job. No action pin moved this cycle, so neither workflow file needed a
   digest bump.
+  At the `3d459173c` rebase upstream added **two new workflows under
+  `.github/workflows/`** — `codeql.yml` (`d7abab500`, `b73b16dc9`) and
+  `trivy.yml` (`1d06f8a99`) — and they are the first additions there that the
+  fork cannot simply leave alone: both run on `depot-ubuntu-latest` and both
+  trigger on **push and pull_request to `main`**, so they would have failed on
+  every fork push. `release.yml` stays out of scope precisely because it is
+  `workflow_dispatch`-only; **the test is the trigger, not the filename**, so
+  check any new workflow's `on:` block before deciding it is upstream's problem.
+  Both took this entry's standard transformation — `ubuntu-latest` runners, and
+  for Trivy `depot/setup-action` + `depot/build-push-action` replaced by
+  `docker/setup-buildx-action` + `docker/build-push-action`, keeping `load:
+  true` and adding `cache-from`/`cache-to: type=gha` because the fork has no
+  depot cache. CodeQL needed nothing but the runner swap: its Go step is already
+  `go build -tags exclude_frontend ./backend/... ./cli/... ./types/...`, so it
+  needs no `frontend/dist`. Both keep upstream's schedules and their SHA-pinned
+  `github/codeql-action` / `aquasecurity/trivy-action` steps. Their SARIF upload
+  needs `security-events: write`, free on a public repository — if this fork
+  ever goes private, drop both rather than debugging them. `ci.yml` itself took
+  only the usual `cli-e2e-tests` modify/delete, because `2b7f10f9b`'s
+  `voidzero-dev/setup-vp` v1.22.0 bump
+  (`cab1ab9eaff52d4857875f4f2c016e36af8f2c76`) landed inside the deleted job as
+  well as in the two steps the fork keeps.
   `build-next-images.yml` pins
   `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1` and
-  `docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0`,
-  copied verbatim from upstream. The `docker/*` actions the fork uses alone
+  `docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0`,
+  copied verbatim from upstream — but note that this entry claimed those pins
+  from the `5feb10bf` rebase onwards while the file was in fact still on
+  floating `@v7.0.0` / `@v4.4.0` tags, which was only noticed and fixed at
+  `3d459173c`. Verify the pins against the file rather than against this note. The `docker/*` actions the fork uses alone
   (`setup-qemu-action`, `setup-buildx-action`, `metadata-action`,
   `build-push-action`) stay on tags: upstream pins none of them, so there is no
   verified digest to copy.
@@ -1277,9 +1345,13 @@ When you rebase, work through every entry below. For each one:
   present, both still take `VERSION`/`REVISION` build-args). Upstream's `ci.yml`
   still uses `depot-*` runners, Depot CLI, and the `deadcode` + `cli-e2e-tests`
   jobs. The fork adaptation is still required. **keep.**
-- **Out of scope:** `release.yml` and the new `pr-quality.yml` are left at
-  upstream — the fork has never customised them. Upstream deleted
-  `build-pr-images.yml` entirely, so there is nothing left to leave alone.
+- **Out of scope:** `release.yml` and `pr-quality.yml` are left at upstream —
+  the fork has never customised them, and neither fires here (`release.yml` is
+  `workflow_dispatch`-only and `pr-quality.yml` has its `on:` block commented
+  out). Upstream deleted `build-pr-images.yml` entirely, so there is nothing
+  left to leave alone. Everything under `.depot/` is upstream's and stays
+  untouched: those workflows need depot runners, a depot project token and
+  GoReleaser Pro, and GitHub never runs them for this fork.
 
 ### 4. GitOps manual sync: honest feedback and per-row spinner
 
@@ -1434,8 +1506,10 @@ When you rebase, work through every entry below. For each one:
   with the old number recorded, which change #8 repairs at startup. At the
   `a509628d4` rebase upstream added no migration at all, so `094` stayed free
   and the fork migration kept its number for the one cycle; at `919bd842e`
-  upstream claimed `094` and the ninth renumbering followed. Upstream's
-  ceiling is now `094`. The service code moved again at the `1cb757731` rebase: upstream's
+  upstream claimed `094` and the ninth renumbering followed; and at
+  `3d459173c` upstream again added no migration, so `095` stood for a second
+  cycle and change #8 gained no tenth era. Upstream's
+  ceiling is still `094`. The service code moved again at the `1cb757731` rebase: upstream's
   `7d41c588a` standardized-domain-layout refactor **deleted**
   `backend/internal/gitops/gitops_sync.go`, so the `CreateSync`/`UpdateSync`
   wiring now lives in `backend/internal/gitops/service.go` and the injection
@@ -1446,7 +1520,12 @@ When you rebase, work through every entry below. For each one:
   `stageDirectorySyncInternal` and now does the reserved-root-env-file
   partition inline). The directory path takes the commit hash as a new
   parameter on `syncProjectDirectory`; upstream has ten test callsites to
-  update alongside it. Metadata is
+  update alongside it. At the `3d459173c` rebase that call was the entry's only
+  conflict: upstream had switched it from `ctx` to the separate `stageCtx` it
+  now uses for the staging phase, in the same statement where the fork adds
+  `source.commitHash`. Take upstream's context and keep the fork's argument —
+  passing the stale `ctx` compiles fine and silently opts the directory path out
+  of the staging timeout. Metadata is
   appended _after_ the repo's own env so dotenv's last-assignment-wins rule keeps
   a repo-supplied key from spoofing it. Known corner: disabling the flag drops
   the keys on the next sync unless the repository ships no `.env` of its own —
@@ -1601,6 +1680,14 @@ When you rebase, work through every entry below. For each one:
   renumbering, `fork_migration_repair.go` again took **zero** conflicts — the
   second cycle running, and the payoff for moving it out of `database.go`.
 
+  **At the `3d459173c` rebase nothing happened to this entry at all.** Upstream
+  added no migration, so change #7 kept `095`, no tenth era was needed, and
+  `backend/internal/database/` came out of the rebase **byte-identical** to its
+  pre-rebase state — the third cycle in a row with zero conflicts here, and the
+  first with zero changes. `repairPreRenumberForkMigrationInternal` therefore
+  still measures `gocognit` **25**; it was not re-measured, which is only sound
+  because the file is unchanged.
+
   **Delete the whole thing** — repair, constants, the tests, and the README's
   closing sentence about it — once no pre-094 database is left running, which for
   a personal fork means once the lab instances have all been through one repaired
@@ -1715,6 +1802,18 @@ When you rebase, work through every entry below. For each one:
   now seeds two jobs instead of three; the prefetch list itself is unchanged.
   Re-verified that `mirror.gcr.io` serves `library/nginx:stable-alpine` and
   `library/alpine:3.20` anonymously (manifest HTTP 200 for both).
+  At the `3d459173c` rebase the re-grep found **no new site** for the second
+  rebase running: the five fixture sites
+  (`tests/setup/project.data.ts`,
+  `tests/setup/projects/test-project-static/compose.yaml`,
+  `tests/setup/gitops-test-repo/compose.yaml`, `tests/setup/global-setup.ts`
+  and `tests/spec/projects.spec.ts`) plus the `ci.yml` prefetch are all still on
+  the mirror, with `TEST_IMAGE_REFS.nginx` in `tests/spec/images.spec.ts` still
+  deliberately on ECR. Upstream touched `tests/spec/projects.spec.ts` this
+  cycle without disturbing the mirrored line, and both mirror manifests were
+  re-verified at HTTP 200. Note that the two new workflows change #3 adapted
+  (`codeql.yml`, `trivy.yml`) pull no test images, so this entry's prefetch does
+  not need mirroring into them.
 - **Redundancy check:** Drop if upstream moves these pulls off `public.ecr.aws`
   itself. (Upstream's `081c9ac` moved nginx _within_ ECR, from
   `docker/library/nginx` to the `nginx/nginx` gallery namespace — still
@@ -1944,6 +2043,24 @@ When you rebase, work through every entry below. For each one:
   `Docker.Call` in the same spirit even though `DockerClient` still exists
   (it is upstream's `updater.DockerClientProvider` implementation and only
   wraps `GetClient`); keep the port method itself, the engine needs it.
+  **At the `3d459173c` rebase the updater half had to absorb upstream's new
+  opt-out bypass.** `819076c59` _(fix: ignore update opt-outs for manual updater
+  runs (#4564))_ threads an `ignoreSettingsExclusionsKey{}` context flag into
+  both used-image collection paths, so a manual run ignores the
+  `com.getarcaneapp.arcane.updater=false` label **and** the settings exclusion
+  list. Both halves conflicted head-on with the fork's filter, and the
+  resolution keeps upstream's flag together with the fork's filter: the filter
+  is still fetched into `updateFilter` / `composeUpdateFilter`, and **both**
+  `Excludes` calls are now gated on `!ignoreOptOuts`. Gate them — do not take
+  upstream's flag for the label check alone. The filter is the mode-aware
+  reading of exactly the list upstream's flag exists to bypass, so an ungated
+  `Excludes` would let a manual run bypass the list in exclude mode while still
+  confining it to the allowlist in include mode, which is the entry's silent
+  inversion hazard in its purest form. The same conflict removed the last stale
+  `if s.deps.Settings != nil` guard in this file: upstream's own
+  `s.deps.Settings` calls on either side of it are unguarded, and
+  `SettingsService.ContainerAutoUpdateFilter`'s nil-receiver guard is what makes
+  that safe.
   **At the `a509628d4` rebase every backend consumer had to be re-derived onto
   upstream's composite literals.** `d2b4166` rebuilt `GetContainerDetails` and
   `BuildSummaries` around `containertypes.Details{ //exhaustruct:enforce }` /
@@ -1990,7 +2107,15 @@ When you rebase, work through every entry below. For each one:
   `autoUpdateExcludedContainers` reference — in
   `internal/imageupdate/service_test.go` — is an upstream test asserting the
   opposite of a consumer ("the UI exclusion governs installation only; it must
-  not reach the checker"), so there is nothing there to make mode-aware.
+  not reach the checker"), so there is nothing there to make mode-aware. At
+  `3d459173c` they came back clean a second time: the inversion is still only in
+  `internal/settings/container_filter.go`,
+  `UpdaterService.ExcludedContainers` is still the port's only implementation,
+  and the two new `autoUpdateExcludedContainers` references — in
+  `internal/dashboard/service_test.go` — are upstream tests that exercise the
+  default exclusion mode and so need nothing. Upstream's `819076c59` was the one
+  genuine new consumer this cycle; see the updater note above for how it was
+  made mode-aware.
   `SetContainerAutoUpdateExclusionInternal` — which backs the per-container
   auto-update toggle and the Updates-page ignore action — inverts its
   add/remove in include mode so "enable auto-update" always means "make this

@@ -1,3 +1,13 @@
+> ## About this fork
+>
+> This is a development fork of [getarcaneapp/arcane](https://github.com/getarcaneapp/arcane). I develop directly on `main` here, periodically rebasing it onto upstream `main`. Container images are published to `ghcr.io/jmclaren7/arcane` and `ghcr.io/jmclaren7/arcane-agent` (tag `next`). The published images are for testing only.
+>
+> The full, up-to-date list of changes that set this fork apart from upstream — and the notes for re-applying them when rebasing — lives in **[FORK.md](FORK.md)**. In short, the fork carries expanded contributor docs, CI workflows adapted to run on a fork without upstream-only infrastructure (including E2E test images pulled from a mirror to dodge registry rate limits), a set of GitOps and UI refinements (honest manual-sync feedback with a per-row spinner, abbreviated commit hashes, a copy button that hides itself when the Clipboard API is unavailable, and quieter startup logging), and three small self-contained features: injecting the synced Git commit into a project's environment, converting a Git-synced project back into a regular one, and an include-mode switch that turns the auto-update and auto-heal container lists into allowlists. It also carries one piece of fork-only debt: a one-time startup repair for lab databases whose migration bookkeeping the fork's own renumbering broke.
+>
+> Upstream README below.
+>
+> ` `
+
 > [!IMPORTANT]
 > Feature requests have moved to [Discussions](https://github.com/getarcaneapp/arcane/discussions/categories/feature-requests). Open new requests and upvote existing ones there; issues are only used for Bug reports now to help maintain priority on those issues.
 

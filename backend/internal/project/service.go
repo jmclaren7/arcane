@@ -211,6 +211,7 @@ func (s *ProjectService) EnsureGitOpsProjectLinked(ctx context.Context, gitOpsSy
 		LastSyncError:          gitOpsSync.LastSyncError,
 		LastSyncCommit:         gitOpsSync.LastSyncCommit,
 		PendingRedeploy:        gitOpsSync.PendingRedeploy,
+		InjectCommitEnv:        gitOpsSync.InjectCommitEnv,
 		PreDeployScriptPath:    gitOpsSync.PreDeployScriptPath,
 		PreDeployRunnerImage:   gitOpsSync.PreDeployRunnerImage,
 		PreDeployEnv:           gitOpsSync.PreDeployEnv,

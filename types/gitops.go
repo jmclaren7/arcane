@@ -87,6 +87,11 @@ type (
 		RedeployAfterSync bool `json:"redeployAfterSync" required:"false"`
 		BackupOnSave      bool `json:"backupOnSave" required:"false"`
 		BackupPending     bool `json:"backupPending" readOnly:"true"`
+
+		// InjectCommitEnv writes the synced commit into the project's env as
+		// ARCANE_GIT_COMMIT, ARCANE_GIT_COMMIT_SHORT and ARCANE_GIT_BRANCH, so the
+		// deployed application can report the commit it was deployed from.
+		InjectCommitEnv bool `json:"injectCommitEnv" required:"false"`
 	}
 
 	GitOpsSyncCounts struct {

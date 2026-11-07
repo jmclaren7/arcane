@@ -132,6 +132,17 @@
 		</div>
 		<Switch id="redeployAfterSyncSwitch" bind:checked={inputs.redeployAfterSync.value} />
 	</div>
+
+	<div class="flex items-center justify-between gap-4 py-3">
+		<div class="min-w-0">
+			<Label for="injectCommitEnvSwitch" class="mb-0">{m.git_sync_inject_commit_env()}</Label>
+			<p class="text-xs text-muted-foreground">{m.git_sync_inject_commit_env_description()}</p>
+			{#if inputs.injectCommitEnv.error}
+				<p class="text-xs font-medium text-destructive">{inputs.injectCommitEnv.error}</p>
+			{/if}
+		</div>
+		<Switch id="injectCommitEnvSwitch" bind:checked={inputs.injectCommitEnv.value} />
+	</div>
 </div>
 
 <Collapsible.Root class="group/collapsible">

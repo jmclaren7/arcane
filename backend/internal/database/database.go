@@ -239,6 +239,9 @@ func migrateDatabase(ctx context.Context, db *sql.DB, dbProvider string, options
 		slog.InfoContext(ctx, "Database schema is up to date", "provider", dbProvider, "migrationVersion", currentVersion)
 		return nil
 	case currentVersion < requiredVersion:
+		if err = repairRenumberedForkMigration(ctx, db, dbProvider, currentVersion, requiredVersion); err != nil {
+			return err
+		}
 		if _, err = provider.UpTo(ctx, requiredVersion); err != nil {
 			return fmt.Errorf("failed to apply embedded Goose migrations for %s: %w", dbProvider, err)
 		}

@@ -19,6 +19,7 @@
 				syncDirectory: z.boolean().default(false),
 				pullImageAfterSync: z.boolean().default(false),
 				redeployAfterSync: z.boolean().default(false),
+				injectCommitEnv: z.boolean().default(false),
 				maxSyncFiles: z.coerce.number().int().nonnegative(),
 				maxSyncTotalSizeMb: z.coerce.number().int().nonnegative(),
 				maxSyncBinarySizeMb: z.coerce.number().int().nonnegative(),
@@ -164,6 +165,7 @@
 			syncDirectory: syncToEdit?.syncDirectory ?? false,
 			pullImageAfterSync: syncToEdit?.pullImageAfterSync ?? false,
 			redeployAfterSync: syncToEdit?.redeployAfterSync ?? false,
+			injectCommitEnv: syncToEdit?.injectCommitEnv ?? false,
 			maxSyncFiles: syncToEdit ? (syncToEdit.maxSyncFiles ?? 0) : (settings.gitSyncMaxFiles ?? 0),
 			maxSyncTotalSizeMb: syncToEdit
 				? bytesToMegabytesInternal(syncToEdit.maxSyncTotalSize, 0)
@@ -457,6 +459,7 @@
 			syncDirectory: data.syncDirectory,
 			pullImageAfterSync: data.pullImageAfterSync,
 			redeployAfterSync: data.redeployAfterSync,
+			injectCommitEnv: data.injectCommitEnv,
 			maxSyncFiles: data.maxSyncFiles,
 			maxSyncTotalSize: megabytesToBytesInternal(data.maxSyncTotalSizeMb),
 			maxSyncBinarySize: megabytesToBytesInternal(data.maxSyncBinarySizeMb),

@@ -37,6 +37,7 @@ export type GitOpsSyncWritable =
 	| 'syncDirectory'
 	| 'pullImageAfterSync'
 	| 'redeployAfterSync'
+	| 'injectCommitEnv'
 	| 'maxSyncFiles'
 	| 'maxSyncTotalSize'
 	| 'maxSyncBinarySize'

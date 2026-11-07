@@ -10761,10 +10761,10 @@ func TestProjectService_ReleaseGitOpsProjectLinks_ReleasesProjectAndSync(t *test
 	require.NoError(t, err)
 	assert.Nil(t, detached.GitOpsManagedBy)
 
-	var sync GitOpsSync
-	require.NoError(t, db.Where("id = ?", syncID).First(&sync).Error)
-	assert.Nil(t, sync.ProjectID, "the sync must not keep managing the detached project")
-	assert.False(t, sync.AutoSync, "auto sync must be off so a restart does not re-register the job")
+	var releasedSync GitOpsSync
+	require.NoError(t, db.Where("id = ?", syncID).First(&releasedSync).Error)
+	assert.Nil(t, releasedSync.ProjectID, "the sync must not keep managing the detached project")
+	assert.False(t, releasedSync.AutoSync, "auto sync must be off so a restart does not re-register the job")
 
 	// Releasing an already-regular project is a no-op, not an error.
 	released, err = svc.ReleaseGitOpsProjectLinks(ctx, syncID, types.Actor{})

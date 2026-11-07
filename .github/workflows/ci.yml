@@ -243,4 +243,3 @@ jobs:
             !tests/.report/cli/**
           include-hidden-files: true
           retention-days: 15
-

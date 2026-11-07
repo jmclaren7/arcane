@@ -45,9 +45,7 @@ const (
 	// forkCommitEnvRetiredScheduleEra is the era whose fork migration took the
 	// number of upstream's retired-schedule-defaults cleanup.
 	forkCommitEnvRetiredScheduleEra int64 = 95
-)
 
-const (
 	forkRepairSQLiteSeenAt = `
 ALTER TABLE image_updates ADD COLUMN latest_seen_at DATETIME;
 UPDATE image_updates SET latest_seen_at = CURRENT_TIMESTAMP WHERE has_update = 1;

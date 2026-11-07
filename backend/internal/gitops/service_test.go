@@ -1944,10 +1944,10 @@ func TestGitOpsSyncService_DetachManagedProjectsUnregistersJob(t *testing.T) {
 	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
 	assert.Nil(t, project.GitOpsManagedBy)
 
-	var sync projectpkg.GitOpsSync
-	require.NoError(t, db.Where("id = ?", syncID).First(&sync).Error)
-	assert.False(t, sync.AutoSync)
-	assert.Nil(t, sync.ProjectID)
+	var detachedSync projectpkg.GitOpsSync
+	require.NoError(t, db.Where("id = ?", syncID).First(&detachedSync).Error)
+	assert.False(t, detachedSync.AutoSync)
+	assert.Nil(t, detachedSync.ProjectID)
 }
 
 func TestGitOpsSyncService_DetachManagedProjectsReleasesStrandedProject(t *testing.T) {

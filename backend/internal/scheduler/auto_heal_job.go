@@ -47,6 +47,15 @@ type (
 		timestamps []time.Time
 	}
 
+	// autoHealContainerFilter is the parsed auto-heal container list plus the
+	// mode deciding whether listed names are excluded or exclusively included.
+	// Auto-heal keeps its own parse because it has its own list and its own
+	// mode setting.
+	autoHealContainerFilter struct {
+		names       map[string]struct{}
+		includeMode bool
+	}
+
 	AutoHealJob struct {
 		settingsService     *settings.SettingsService
 		eventService        *event.EventService
@@ -360,14 +369,6 @@ func (j *AutoHealJob) releaseRestartSlot(containerID string, reserved time.Time)
 	if len(record.timestamps) == 0 {
 		delete(j.restarts, containerID)
 	}
-}
-
-// autoHealContainerFilter is the parsed auto-heal container list plus the mode
-// deciding whether listed names are excluded or exclusively included. Auto-heal
-// keeps its own parse because it has its own list and its own mode setting.
-type autoHealContainerFilter struct {
-	names       map[string]struct{}
-	includeMode bool
 }
 
 func (f autoHealContainerFilter) excludes(name string) bool {

@@ -1555,8 +1555,8 @@ func (s *ContainerService) GetContainerDetails(ctx context.Context, id string) (
 			CurrentContainerID: currentContainerID,
 		}),
 		AutoUpdateEnabled: !labels.IsUpdateDisabled(details.Labels) && !autoUpdateFilter.Excludes([]string{details.Name}),
-		UpdateInfo: updates[details.ID],
-		ActivityID: details.ActivityID,
+		UpdateInfo:        updates[details.ID],
+		ActivityID:        details.ActivityID,
 	}, nil
 }
 

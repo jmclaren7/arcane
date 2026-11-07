@@ -109,7 +109,7 @@ type (
 		// replaces the Git-sourced env, so the last injected values stay in the
 		// project's .env until they are removed by hand.
 		InjectCommitEnv bool `json:"injectCommitEnv" gorm:"column:inject_commit_env;default:false"`
-		PendingRedeploy     bool                 `json:"-" gorm:"column:pending_redeploy;not null;default:false"`
+		PendingRedeploy bool `json:"-" gorm:"column:pending_redeploy;not null;default:false"`
 
 		BackupOnSave   bool `json:"backupOnSave" gorm:"column:backup_on_save;default:true"`
 		BackupPending  bool `json:"backupPending" gorm:"column:backup_pending;default:false"`

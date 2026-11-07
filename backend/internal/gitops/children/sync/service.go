@@ -503,7 +503,9 @@ func (s *Service) failSync(ctx context.Context, result *types.GitOpsSyncResult, 
 	return err
 }
 
-func (s *Service) syncProjectDirectory(ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile, commitHash string, actor types.Actor) (*projectpkg.Project, []string, bool, bool, error) {
+func (s *Service) syncProjectDirectory(
+	ctx context.Context, sync *projectpkg.GitOpsSync, syncFiles []projects.SyncFile, commitHash string, actor types.Actor,
+) (*projectpkg.Project, []string, bool, bool, error) {
 	projectsDir, err := s.projectService.GetProjectsDirectory(ctx)
 	if err != nil {
 		return nil, nil, false, false, fmt.Errorf("failed to get projects directory: %w", err)

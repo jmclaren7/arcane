@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { toast } from 'svelte-sonner';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	import ArcaneTable from '#lib/components/arcane-table/arcane-table.svelte';
 	import RemoveMenuItem from '#lib/components/arcane-table/cells/remove-menu-item.svelte';
@@ -43,7 +44,7 @@
 	import { bulkConfirmAndRun, confirmAndRun } from '#lib/utils/bulk-actions.js';
 	import { rowKey, type EnvironmentPage, type EnvironmentRow } from '#lib/utils/environments.js';
 	import { formatDateTimeShort } from '#lib/utils/formatting.js';
-	import { toGitRouteUrl } from '#lib/utils/navigation.js';
+	import { shortenGitCommit, toGitRouteUrl } from '#lib/utils/navigation.js';
 	import { tryCatch } from '#lib/utils/try-catch.js';
 
 	type FieldVisibility = Record<string, boolean>;
@@ -70,9 +71,13 @@
 	const canEditBackup = (sync: SyncRow) => canBackup(sync) && hasPermission('gitops:update', sync.environmentId);
 
 	const isLoading = $state({
-		removing: false,
-		syncing: false
+		removing: false
 	});
+	// Tracks which sync rows are currently running. Each row shows its own
+	// spinner (in the status column) and disables only its own action, so
+	// independent syncs can run at once -- matching the per-sync-ID coalescing
+	// the backend already enforces.
+	const syncingKeys = new SvelteSet<string>();
 	let mobileFieldVisibility = $state<Record<string, boolean>>({});
 	let backupHistoryOpen = $state(false);
 	let backupResolveOpen = $state(false);
@@ -178,18 +183,31 @@
 	}
 
 	async function handlePerformSync(sync: SyncRow) {
-		isLoading.syncing = true;
+		const key = rowKey(sync);
+		if (syncingKeys.has(key)) return;
+		syncingKeys.add(key);
 		const result = await tryCatch(gitOpsSyncService.performSync(sync.environmentId, sync.id));
 		await handleApiResultWithCallbacks({
 			result,
 			message: isBackup(sync) ? m.backup_failed() : m.git_sync_failed(),
 			setLoadingState: () => {},
-			onSuccess: async () => {
-				toast.success(isBackup(sync) ? m.backup_completed() : m.git_sync_success());
+			onSuccess: async (data) => {
+				// A 2xx response doesn't mean the sync ran: an overlapping run is
+				// coalesced server-side and comes back with success=false. Only claim
+				// success when it actually applied, and surface the server's message
+				// either way instead of a blanket "completed successfully".
+				if (data?.success) {
+					toast.success(
+						isBackup(sync) ? m.backup_completed() : m.git_sync_success(),
+						data.message ? { description: data.message } : undefined
+					);
+				} else {
+					toast.warning(data?.message || (isBackup(sync) ? m.backup_failed() : m.git_sync_failed()));
+				}
 				await invalidateSyncs();
 			}
 		});
-		isLoading.syncing = false;
+		syncingKeys.delete(key);
 	}
 
 	const columns = $derived([
@@ -337,7 +355,12 @@
 {/snippet}
 
 {#snippet StatusCell({ item }: { item: SyncRow })}
-	{#if isBackup(item)}
+	{#if syncingKeys.has(rowKey(item))}
+		<span class="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+			<RefreshCwIcon class="size-3.5 animate-spin" />
+			{m.common_syncing()}
+		</span>
+	{:else if isBackup(item)}
 		<BackupStateBadge sync={item} />
 	{:else if item.lastSyncStatus === 'success'}
 		<Badge variant="green" minWidth="20">{m.common_success()}</Badge>
@@ -353,6 +376,7 @@
 {#snippet CommitCell({ item }: { item: SyncRow })}
 	{#if item.lastSyncCommit}
 		{@const commitUrl = item.repository?.url ? toGitRouteUrl(item.repository.url, 'commit', item.lastSyncCommit) : null}
+		{@const shortCommit = shortenGitCommit(item.lastSyncCommit)}
 		<div class="flex min-w-0 items-center gap-1.5">
 			<HashIcon class="size-3.5 shrink-0 text-muted-foreground" />
 			{#if commitUrl}
@@ -360,13 +384,17 @@
 					href={commitUrl}
 					target="_blank"
 					rel="external"
+					title={item.lastSyncCommit}
 					class="min-w-0 truncate rounded-xl bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:text-primary"
 				>
-					{item.lastSyncCommit}
+					{shortCommit}
 				</a>
 			{:else}
-				<code class="min-w-0 truncate rounded-xl bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
-					{item.lastSyncCommit}
+				<code
+					title={item.lastSyncCommit}
+					class="min-w-0 truncate rounded-xl bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground"
+				>
+					{shortCommit}
 				</code>
 			{/if}
 		</div>
@@ -452,7 +480,7 @@
 {#snippet RowActions({ item }: { item: SyncRow })}
 	<RowActionsMenu name={item.name}>
 		{#if isBackup(item)}
-			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={isLoading.syncing || !canRunBackup(item)}>
+			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={syncingKeys.has(rowKey(item)) || !canRunBackup(item)}>
 				<UploadIcon class="size-4" />
 				{m.back_up_now()}
 			</DropdownMenu.Item>
@@ -482,7 +510,7 @@
 				/>
 			{/if}
 		{:else}
-			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={isLoading.syncing}>
+			<DropdownMenu.Item onclick={() => handlePerformSync(item)} disabled={syncingKeys.has(rowKey(item))}>
 				<PlayIcon class="size-4" />
 				{m.pull_from_git()}
 			</DropdownMenu.Item>

@@ -69,3 +69,9 @@ func (r *Registry) Unregister(_ context.Context, entityID string) {
 func (r *Registry) Acquire(ctx context.Context, entityID string) (*runs.Lease, error) {
 	return r.admissionGate.Acquire(ctx, types.SchedulerAdmissionKey{Scope: r.admissionScope, ID: entityID})
 }
+
+// TryAcquire admits without waiting, for an operation that must refuse rather
+// than queue behind a run already in flight.
+func (r *Registry) TryAcquire(ctx context.Context, entityID string) (*runs.Lease, bool, error) {
+	return r.admissionGate.TryAcquire(ctx, types.SchedulerAdmissionKey{Scope: r.admissionScope, ID: entityID})
+}

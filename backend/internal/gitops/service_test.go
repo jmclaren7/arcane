@@ -1862,3 +1862,113 @@ func TestAggregateSyncsSumsCounts(t *testing.T) {
 	require.Equal(t, types.EnvironmentRef{ID: "b", Name: "Env b"}, body.Data[0].Environment())
 	require.Len(t, body.FailedEnvironments, 1)
 }
+
+func TestGitOpsSyncService_DetachManagedProjectsRefusesWhileSyncRuns(t *testing.T) {
+	ctx := t.Context()
+	gate := newGitOpsAdmissionGateForTest(t)
+	scheduler := &gitOpsSyncTestScheduler{}
+	svc, db, _ := setupGitOpsSyncDirectoryTestService(t, scheduler, gate)
+
+	syncID := "sync-detach-race"
+	projectID := "proj-detach-race"
+	require.NoError(t, db.Create(&projectpkg.GitOpsSync{
+		ID:            syncID,
+		Name:          "Racing Sync",
+		EnvironmentID: "0",
+		RepositoryID:  "repo-1",
+		ComposePath:   "apps/app/compose.yaml",
+		ProjectName:   "app",
+		ProjectID:     &projectID,
+		AutoSync:      true,
+		SyncInterval:  5,
+	}).Error)
+	require.NoError(t, db.Create(&projectpkg.Project{
+		ID:              projectID,
+		Name:            "app",
+		Path:            t.TempDir(),
+		Status:          projectpkg.ProjectStatusStopped,
+		GitOpsManagedBy: &syncID,
+	}).Error)
+
+	// Stand in for a run that already passed PerformSync's admission check and is
+	// holding the ProjectID it loaded.
+	lease, admitted, err := gate.TryAcquire(t.Context(), types.SchedulerAdmissionKey{Scope: gitOpsSyncAdmissionScope, ID: syncID})
+	require.NoError(t, err)
+	require.True(t, admitted)
+
+	err = svc.DetachManagedProjects(ctx, "0", syncID, types.Actor{})
+	require.ErrorIs(t, err, common.ErrConflict)
+
+	var project projectpkg.Project
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	require.NotNil(t, project.GitOpsManagedBy, "the binding must survive so the in-flight run stays consistent")
+	assert.Equal(t, syncID, *project.GitOpsManagedBy)
+	assert.Empty(t, scheduler.removed, "a refused detach must not unregister the job")
+
+	lease.Release(t.Context())
+}
+
+func TestGitOpsSyncService_DetachManagedProjectsUnregistersJob(t *testing.T) {
+	ctx := t.Context()
+	scheduler := &gitOpsSyncTestScheduler{}
+	svc, db, _ := setupGitOpsSyncDirectoryTestService(t, scheduler, newGitOpsAdmissionGateForTest(t))
+
+	syncID := "sync-detach-job"
+	projectID := "proj-detach-job"
+	require.NoError(t, db.Create(&projectpkg.GitOpsSync{
+		ID:            syncID,
+		Name:          "Auto Sync",
+		EnvironmentID: "0",
+		RepositoryID:  "repo-1",
+		ComposePath:   "apps/app/compose.yaml",
+		ProjectName:   "app",
+		ProjectID:     &projectID,
+		AutoSync:      true,
+		SyncInterval:  5,
+	}).Error)
+	require.NoError(t, db.Create(&projectpkg.Project{
+		ID:              projectID,
+		Name:            "app",
+		Path:            t.TempDir(),
+		Status:          projectpkg.ProjectStatusStopped,
+		GitOpsManagedBy: &syncID,
+	}).Error)
+
+	require.NoError(t, svc.DetachManagedProjects(ctx, "0", syncID, types.Actor{}))
+
+	// A scheduled run returns early on AutoSync=false but never unregisters, so
+	// the detach has to remove the job itself.
+	assert.Contains(t, scheduler.removed, entityjobs.GitOpsSyncJobPrefix+syncID)
+
+	var project projectpkg.Project
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	assert.Nil(t, project.GitOpsManagedBy)
+
+	var sync projectpkg.GitOpsSync
+	require.NoError(t, db.Where("id = ?", syncID).First(&sync).Error)
+	assert.False(t, sync.AutoSync)
+	assert.Nil(t, sync.ProjectID)
+}
+
+func TestGitOpsSyncService_DetachManagedProjectsReleasesStrandedProject(t *testing.T) {
+	ctx := t.Context()
+	svc, db, _ := setupGitOpsSyncDirectoryTestService(t, &gitOpsSyncTestScheduler{}, newGitOpsAdmissionGateForTest(t))
+
+	deletedSyncID := "sync-deleted-by-old-build"
+	projectID := "proj-stranded"
+	require.NoError(t, db.Create(&projectpkg.Project{
+		ID:              projectID,
+		Name:            "stranded",
+		Path:            t.TempDir(),
+		Status:          projectpkg.ProjectStatusStopped,
+		GitOpsManagedBy: &deletedSyncID,
+	}).Error)
+
+	// Nothing can run for a sync that is gone, so the release must still go
+	// through: that is what unsticks a project stranded by an older build.
+	require.NoError(t, svc.DetachManagedProjects(ctx, "0", deletedSyncID, types.Actor{}))
+
+	var project projectpkg.Project
+	require.NoError(t, db.Where("id = ?", projectID).First(&project).Error)
+	assert.Nil(t, project.GitOpsManagedBy)
+}

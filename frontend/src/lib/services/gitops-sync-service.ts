@@ -45,6 +45,10 @@ class GitOpsSyncService extends BaseAPIService {
 		return this.handleResponse(this.api.delete(`/environments/${environmentId}/gitops/syncs/${syncId}`));
 	}
 
+	async detachManagedProjects(environmentId: string, syncId: string): Promise<void> {
+		return this.handleResponse(this.api.post(`/environments/${environmentId}/gitops/syncs/${syncId}/detach`));
+	}
+
 	async performSync(environmentId: string, syncId: string): Promise<GitOpsSyncResult> {
 		return this.handleResponse(
 			this.api.post(`/environments/${environmentId}/gitops/syncs/${syncId}`, undefined, { params: { action: 'sync' } })

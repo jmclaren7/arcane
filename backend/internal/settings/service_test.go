@@ -784,6 +784,22 @@ func TestSettingsServiceActorSerializesContainerExclusionUpdates(t *testing.T) {
 	require.ElementsMatch(t, []string{"api", "worker"}, strings.Split(svc.GetStringSetting(ctx, "autoUpdateExcludedContainers"), ","))
 }
 
+func TestSettingsServiceContainerExclusionInvertsInIncludeMode(t *testing.T) {
+	ctx := t.Context()
+	db := setupSettingsTestDB(t)
+	svc, err := newSettingsServiceForTest(t, ctx, db)
+	require.NoError(t, err)
+	require.NoError(t, svc.SetBoolSetting(ctx, "autoUpdateIncludeMode", true))
+
+	// In include mode enabling auto-update (excluded=false) adds to the list.
+	require.NoError(t, svc.SetContainerAutoUpdateExclusion(ctx, "api", false))
+	require.Equal(t, "api", svc.GetStringSetting(ctx, "autoUpdateExcludedContainers"))
+
+	// And disabling auto-update (excluded=true) removes from the list.
+	require.NoError(t, svc.SetContainerAutoUpdateExclusion(ctx, "api", true))
+	require.Empty(t, svc.GetStringSetting(ctx, "autoUpdateExcludedContainers"))
+}
+
 func BenchmarkSettingsService_GetSettings(b *testing.B) {
 	ctx := b.Context()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

@@ -1088,8 +1088,29 @@ func (s *UpdaterService) ClearImageUpdateRecord(ctx context.Context, record upda
 	return query.Where("id = ? AND container_id = ?", record.ID, "").Updates(map[string]any{"has_update": false, "latest_seen_at": nil}).Error
 }
 
+// ExcludedContainers returns auto-update exclusions from Arcane settings. In
+// include mode the configured names are the only containers allowed to update,
+// so the exclusion list is materialized from every other known container: the
+// embedded updater engine only understands an exclusion list through this port.
 func (s *UpdaterService) ExcludedContainers(ctx context.Context) ([]string, error) {
-	return kit.Unique(kit.TrimNonEmpty(strings.Split(s.deps.Settings.GetStringSetting(ctx, "autoUpdateExcludedContainers"), ","))), nil
+	filter := s.deps.Settings.ContainerAutoUpdateFilter(ctx)
+	if !filter.IncludeMode() {
+		return filter.ListedNames(), nil
+	}
+
+	listResult, err := s.deps.Docker.Call(ctx, func(ctx context.Context, dockerClient *client.Client) (client.ContainerListResult, error) {
+		return dockerClient.ContainerList(ctx, client.ContainerListOptions{All: true})
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, summary := range listResult.Items {
+		if name := docker.ContainerNameFromNames(summary.Names); name != "" && !filter.Lists(name) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }
 
 func (s *UpdaterService) ProjectByComposeName(ctx context.Context, composeName string) (updater.ComposeProject, error) {
@@ -1500,7 +1521,7 @@ func (s *UpdaterService) CollectUsedImages(ctx context.Context) (map[string]stru
 }
 
 func (s *UpdaterService) collectUsedImagesFromContainers(ctx context.Context, out map[string]struct{}) error {
-	excludedContainers := docker.ExcludedContainerNameSet(s.deps.Settings.GetStringSetting(ctx, "autoUpdateExcludedContainers"))
+	updateFilter := s.deps.Settings.ContainerAutoUpdateFilter(ctx)
 	ignoreOptOuts, _ := ctx.Value(ignoreSettingsExclusionsKey{}).(bool)
 	listResult, err := s.deps.Docker.Call(ctx, func(ctx context.Context, dockerClient *client.Client) (client.ContainerListResult, error) {
 		return dockerClient.ContainerList(ctx, client.ContainerListOptions{})
@@ -1517,7 +1538,7 @@ func (s *UpdaterService) collectUsedImagesFromContainers(ctx context.Context, ou
 			continue
 		}
 
-		if !ignoreOptOuts && docker.ContainerNameExcluded(summary.Names, excludedContainers) {
+		if !ignoreOptOuts && updateFilter.Excludes(summary.Names) {
 			slog.DebugContext(ctx, "collectUsedImagesFromContainers: skipping excluded container", "containerId", summary.ID, "names", summary.Names)
 			continue
 		}
@@ -1590,8 +1611,15 @@ func (s *UpdaterService) collectUsedImagesFromProjects(ctx context.Context, out 
 	}
 
 	ignoreOptOuts, _ := ctx.Value(ignoreSettingsExclusionsKey{}).(bool)
+	composeUpdateFilter := s.deps.Settings.ContainerAutoUpdateFilter(ctx)
 	for _, summary := range composeContainers {
 		if _, isActive := activeProjectNames[docker.ComposeProjectLabel(summary.Labels)]; !isActive || (!ignoreOptOuts && labels.IsUpdateDisabled(summary.Labels)) {
+			continue
+		}
+		// Without this, include mode would silently fall back to "every Compose
+		// container" instead of the allowlist.
+		if !ignoreOptOuts && composeUpdateFilter.Excludes(summary.Names) {
+			slog.DebugContext(ctx, "collectUsedImagesFromComposeContainers: skipping excluded container", "containerId", summary.ID, "names", summary.Names)
 			continue
 		}
 		imageRef := strings.TrimSpace(summary.Image)

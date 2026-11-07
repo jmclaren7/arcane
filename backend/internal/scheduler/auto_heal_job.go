@@ -126,13 +126,13 @@ func (j *AutoHealJob) Run(ctx context.Context) (types.SchedulerOutcome, error) {
 		return types.SchedulerOutcome{}, err
 	}
 
-	excludedContainers := j.parseExcludedContainers(ctx)
+	containerFilter := j.parseContainerFilter(ctx)
 	maxRestarts := j.settingsService.GetIntSetting(ctx, "autoHealMaxRestarts")
 	restartWindowMinutes := j.settingsService.GetIntSetting(ctx, "autoHealRestartWindow")
 	restartWindow := time.Duration(restartWindowMinutes) * time.Minute
 
 	selfID := j.selfContainerID(ctx)
-	candidates := j.filterCandidates(containers, excludedContainers, selfID)
+	candidates := j.filterCandidates(containers, containerFilter, selfID)
 	frozen, err := json.Marshal(autoHealPlan{Containers: candidates, MaxRestarts: maxRestarts, WindowMinutes: restartWindowMinutes})
 	if err != nil {
 		return types.SchedulerOutcome{}, err
@@ -185,7 +185,7 @@ func (j *AutoHealJob) selfContainerID(ctx context.Context) string {
 	return j.selfID
 }
 
-func (j *AutoHealJob) filterCandidates(containers []container.Summary, excludedContainers map[string]struct{}, selfID string) []container.Summary {
+func (j *AutoHealJob) filterCandidates(containers []container.Summary, containerFilter autoHealContainerFilter, selfID string) []container.Summary {
 	candidates := make([]container.Summary, 0, len(containers))
 	for _, c := range containers {
 		if selfID != "" && strings.HasPrefix(strings.ToLower(c.ID), selfID) {
@@ -196,7 +196,7 @@ func (j *AutoHealJob) filterCandidates(containers []container.Summary, excludedC
 			continue
 		}
 
-		if _, excluded := excludedContainers[docker.ContainerNameFromNames(c.Names)]; excluded {
+		if containerFilter.excludes(docker.ContainerNameFromNames(c.Names)) {
 			continue
 		}
 
@@ -362,19 +362,33 @@ func (j *AutoHealJob) releaseRestartSlot(containerID string, reserved time.Time)
 	}
 }
 
-func (j *AutoHealJob) parseExcludedContainers(ctx context.Context) map[string]struct{} {
-	raw := j.settingsService.GetStringSetting(ctx, "autoHealExcludedContainers")
-	excluded := make(map[string]struct{})
-	if raw == "" {
-		return excluded
+// autoHealContainerFilter is the parsed auto-heal container list plus the mode
+// deciding whether listed names are excluded or exclusively included. Auto-heal
+// keeps its own parse because it has its own list and its own mode setting.
+type autoHealContainerFilter struct {
+	names       map[string]struct{}
+	includeMode bool
+}
+
+func (f autoHealContainerFilter) excludes(name string) bool {
+	_, listed := f.names[name]
+	if f.includeMode {
+		return !listed
 	}
-	for name := range strings.SplitSeq(raw, ",") {
-		trimmed := strings.TrimSpace(name)
-		if trimmed != "" {
-			excluded[trimmed] = struct{}{}
+	return listed
+}
+
+func (j *AutoHealJob) parseContainerFilter(ctx context.Context) autoHealContainerFilter {
+	filter := autoHealContainerFilter{
+		names:       make(map[string]struct{}),
+		includeMode: j.settingsService.GetBoolSetting(ctx, "autoHealIncludeMode"),
+	}
+	for name := range strings.SplitSeq(j.settingsService.GetStringSetting(ctx, "autoHealExcludedContainers"), ",") {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			filter.names[trimmed] = struct{}{}
 		}
 	}
-	return excluded
+	return filter
 }
 
 func inspectAutoHealContainer(ctx context.Context, dockerClient *client.Client, containerID string) (container.InspectResponse, error) {

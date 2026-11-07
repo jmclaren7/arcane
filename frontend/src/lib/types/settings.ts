@@ -10,6 +10,7 @@ export type Settings = {
 	autoUpdateInterval: number;
 	autoUpdateDelay?: number;
 	autoUpdateExcludedContainers?: string;
+	autoUpdateIncludeMode?: boolean;
 	pollingEnabled: boolean;
 	imageEventWatcherEnabled: boolean;
 	pollingInterval: number;
@@ -44,6 +45,7 @@ export type Settings = {
 	vulnerabilityScanInterval?: number;
 	autoHealEnabled?: boolean;
 	autoHealExcludedContainers?: string;
+	autoHealIncludeMode?: boolean;
 	autoHealMaxRestarts?: number;
 	autoHealRestartWindow?: number;
 	volumeHelperIdleTimeout?: number;

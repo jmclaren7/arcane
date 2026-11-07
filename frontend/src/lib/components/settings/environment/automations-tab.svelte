@@ -264,9 +264,29 @@
 		{/snippet}
 	</SettingsRow>
 	<SettingsRow
+		for="auto-update-include-mode"
+		label={m.container_list_include_mode_label()}
+		description={m.container_list_include_mode_description()}
+		layout="switch"
+		class="p-0"
+		lock={lock('autoUpdateIncludeMode')}
+		mixed={mixed('autoUpdateIncludeMode')}
+	>
+		{#snippet children({ describedBy })}
+			<Switch
+				id="auto-update-include-mode"
+				bind:checked={formInputs.autoUpdateIncludeMode.value}
+				data-mixed={!!mixed('autoUpdateIncludeMode') || undefined}
+				aria-describedby={describedBy}
+			/>
+		{/snippet}
+	</SettingsRow>
+	<SettingsRow
 		for="auto-update-container-search"
-		label={m.excluded_containers()}
-		description={m.auto_update_exclude_description()}
+		label={formInputs.autoUpdateIncludeMode.value ? m.include_containers() : m.excluded_containers()}
+		description={formInputs.autoUpdateIncludeMode.value
+			? m.auto_update_include_description()
+			: m.auto_update_exclude_description()}
 		helpText={m.auto_update_check_label_hint({ label: `${UPDATE_CHECK_LABEL}=false` })}
 		layout="wide"
 		class="p-0"
@@ -345,9 +365,27 @@
 		{/snippet}
 	</SettingsRow>
 	<SettingsRow
+		for="auto-heal-include-mode"
+		label={m.container_list_include_mode_label()}
+		description={m.container_list_include_mode_description()}
+		layout="switch"
+		class="p-0"
+		lock={lock('autoHealIncludeMode')}
+		mixed={mixed('autoHealIncludeMode')}
+	>
+		{#snippet children({ describedBy })}
+			<Switch
+				id="auto-heal-include-mode"
+				bind:checked={formInputs.autoHealIncludeMode.value}
+				data-mixed={!!mixed('autoHealIncludeMode') || undefined}
+				aria-describedby={describedBy}
+			/>
+		{/snippet}
+	</SettingsRow>
+	<SettingsRow
 		for="auto-heal-container-search"
-		label={m.excluded_containers()}
-		description={m.auto_heal_exclude_description()}
+		label={formInputs.autoHealIncludeMode.value ? m.include_containers() : m.excluded_containers()}
+		description={formInputs.autoHealIncludeMode.value ? m.auto_heal_include_description() : m.auto_heal_exclude_description()}
 		layout="wide"
 		class="p-0"
 		lock={lock('autoHealExcludedContainers')}

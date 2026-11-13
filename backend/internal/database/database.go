@@ -198,6 +198,9 @@ func Initialize(ctx context.Context, databaseURL string, options MigrationOption
 		sqlDB.SetConnMaxIdleTime(sqliteConnMaxIdleTime)
 	}
 	metrics.ReportDBStatsMetrics(sqlDB)
+	if repairErr := repairForkMigrationState(ctx, sqlDB, dbProvider); repairErr != nil {
+		return nil, fmt.Errorf("failed to repair fork migration state: %w", repairErr)
+	}
 	if migrationErr := migrateDatabase(ctx, sqlDB, dbProvider, options, latestMigrationVersion); migrationErr != nil {
 		slog.ErrorContext(ctx, "Failed to run migrations", "error", migrationErr)
 		return nil, fmt.Errorf("failed to run migrations: %w", migrationErr)

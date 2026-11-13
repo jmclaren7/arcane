@@ -25,7 +25,7 @@ func ensureForkSchema(ctx context.Context, db *sql.DB, dbProvider string) error 
 		return nil
 	}
 
-	exists, err := sqliteColumnExists(ctx, db, forkGitOpsSyncsTable, forkInjectCommitEnvColumn)
+	exists, err := injectCommitEnvColumnExists(ctx, db, dbProvider)
 	if err != nil {
 		return err
 	}
@@ -38,10 +38,14 @@ func ensureForkSchema(ctx context.Context, db *sql.DB, dbProvider string) error 
 	return nil
 }
 
-func sqliteColumnExists(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+func injectCommitEnvColumnExists(ctx context.Context, db *sql.DB, dbProvider string) (bool, error) {
+	query := "SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?"
+	if dbProvider == dbProviderPostgres {
+		query = "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2"
+	}
 	var count int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?", table, column).Scan(&count); err != nil {
-		return false, fmt.Errorf("failed to inspect %s.%s: %w", table, column, err)
+	if err := db.QueryRowContext(ctx, query, forkGitOpsSyncsTable, forkInjectCommitEnvColumn).Scan(&count); err != nil {
+		return false, fmt.Errorf("failed to inspect %s.%s: %w", forkGitOpsSyncsTable, forkInjectCommitEnvColumn, err)
 	}
 	return count > 0, nil
 }

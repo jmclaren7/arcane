@@ -518,7 +518,11 @@ func (s *ApiKeyService) getDefaultAdminUser(ctx context.Context, username string
 	adminUser, err := s.userService.GetUserByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, common.ErrUserNotFound) {
-			slog.WarnContext(ctx, "Default admin user not found, skipping default admin API key reconciliation", "username", username)
+			// Expected on any install whose administrator does not use the
+			// built-in account: there is simply no managed key to reconcile.
+			// ReconcileDefaultAdminAPIKey warns instead when a static admin key
+			// was configured, since that one does have nowhere to land.
+			slog.DebugContext(ctx, "Default admin user not found, skipping default admin API key reconciliation", "username", username)
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to load default admin user: %w", err)
@@ -531,7 +535,7 @@ func (s *ApiKeyService) getDefaultAdminUser(ctx context.Context, username string
 		return nil, fmt.Errorf("failed to resolve default admin permissions: %w", resolvePermissionsErr)
 	}
 	if !perms.IsGlobalAdmin() {
-		slog.WarnContext(ctx, "User is not a global admin, skipping default admin API key reconciliation", "username", username)
+		slog.DebugContext(ctx, "User is not a global admin, skipping default admin API key reconciliation", "username", username)
 		return nil, nil
 	}
 
@@ -660,6 +664,9 @@ func (s *ApiKeyService) ReconcileDefaultAdminAPIKey(ctx context.Context, usernam
 	adminUser, err := s.getDefaultAdminUser(ctx, username)
 	if err != nil {
 		return err
+	}
+	if adminUser == nil && rawKey != "" {
+		slog.WarnContext(ctx, "Configured admin API key was not applied: no eligible default admin account exists", "username", username)
 	}
 
 	var affectedIDs []string

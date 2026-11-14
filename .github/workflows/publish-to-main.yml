@@ -24,8 +24,16 @@ jobs:
     if: ${{ github.repository_owner != 'getarcaneapp' }}
     runs-on: ubuntu-latest
     steps:
-
-
+      # GITHUB_TOKEN cannot push commits that change workflow files, and its pushes
+      # do not trigger other workflows (Build Next Images), so a PAT is required.
+      - name: Require push token
+        env:
+          MAIN_PUSH_TOKEN: ${{ secrets.MAIN_PUSH_TOKEN }}
+        run: |
+          if [ -z "$MAIN_PUSH_TOKEN" ]; then
+            echo "::error::Set the MAIN_PUSH_TOKEN secret to a fine-grained PAT with Contents and Workflows read/write on this repository."
+            #exit 1
+          fi
       - name: Checkout source
         uses: actions/checkout@v7.0.0
         with:

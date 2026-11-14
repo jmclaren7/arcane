@@ -1,0 +1,67 @@
+name: Publish Branch to Main
+
+# Fork-only: force-pushes a reviewed branch (normally a rebase result) onto main.
+# Push the commit to `publish-to-main`, or run this manually with a source branch.
+on:
+  push:
+    branches: [publish-to-main]
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Branch to force-push onto main
+        required: true
+        default: rebase-attempt
+
+concurrency:
+  group: publish-to-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: ${{ github.repository_owner != 'getarcaneapp' }}
+    runs-on: ubuntu-latest
+    steps:
+      # GITHUB_TOKEN cannot push commits that change workflow files, and its pushes
+      # do not trigger other workflows (Build Next Images), so a PAT is required.
+      - name: Require push token
+        env:
+          MAIN_PUSH_TOKEN: ${{ secrets.MAIN_PUSH_TOKEN }}
+        run: |
+          if [ -z "$MAIN_PUSH_TOKEN" ]; then
+            echo "::error::Set the MAIN_PUSH_TOKEN secret to a fine-grained PAT with Contents and Workflows read/write on this repository."
+            exit 1
+          fi
+
+      - name: Checkout source
+        uses: actions/checkout@v7.0.0
+        with:
+          ref: ${{ inputs.source || github.ref_name }}
+          fetch-depth: 0
+          token: ${{ secrets.MAIN_PUSH_TOKEN }}
+
+      - name: Force-push onto main
+        env:
+          SOURCE: ${{ inputs.source || github.ref_name }}
+        run: |
+          if [ "$SOURCE" = "main" ]; then
+            echo "::error::The source branch must not be main."
+            exit 1
+          fi
+          git fetch origin main
+          old="$(git rev-parse origin/main)"
+          new="$(git rev-parse HEAD)"
+          if [ "$old" = "$new" ]; then
+            echo "main is already at $new"
+            exit 0
+          fi
+          # Keep the replaced tip reachable before overwriting it.
+          git push --force origin "$old:refs/heads/backup/main-before-publish"
+          git push --force-with-lease="main:$old" origin "$new:refs/heads/main"
+          {
+            echo "### main moved"
+            echo "- from \`$old\` (kept as \`backup/main-before-publish\`)"
+            echo "- to \`$new\` from \`$SOURCE\`"
+          } >> "$GITHUB_STEP_SUMMARY"

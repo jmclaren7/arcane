@@ -113,93 +113,91 @@ When you rebase, work through every entry below. For each one:
    the owner publishes it later with the workflow's manual run (source
    `rebase-attempt`) or by pushing that tip to `publish-to-main`.
 
-> **Last rebased onto upstream:** `94a2625b3` (`94a2625b3ed0127c69c6b9806bae364c1f9ba538`)
-> — _chore: bump deps_, on 2026-11-13.
-> _(Previously `919bd842e`, 2026-10-24. The narratives of every earlier rebase
-> were trimmed from this file at this rebase; read them in this file's history,
-> e.g. `git show 09506642d:FORK.md`.)_
+> **Last rebased onto upstream:** `204ad2faa` (`204ad2faa80a78cc62689c399f1da46d31a7c23d`)
+> — _fix: add missing bulk image pull and project destroy actions (#4914)_, on
+> 2026-11-20.
+> _(Previously `94a2625b3`, 2026-11-13. Earlier rebase narratives live in this
+> file's history, e.g. `git show c91c6dd8f:FORK.md` for the `94a2625b3` one.)_
 >
-> This rebase carried **326 upstream commits** — the start of the **v3** line —
-> and was the largest the fork has taken. Themes: upstream replaced its SQL
-> migration files with **Goose Go migrations on a v2.17.1 baseline**
-> (`4cff77a8c`, baseline version `94`, now up to `113`); the filesystem watcher
-> moved to the external `kit.getarcane.app/tripwire` (`f6aad8689`); API routes
-> were renamed from `/environments/{id}` to `/agents/{id}` (`5522c6544`); the
-> GitOps sync table became cross-environment under `routes/(app)/gitops`, the
-> sync dialog was split into `gitops-sync-form(-fields).svelte` (`0127a2767`)
-> and gained per-sync compose-override and env variables (`5512cc357`); shared
-> contracts collapsed into flat files (`types/gitops.go`, …); environment
-> settings moved into `lib/components/settings/environment/` with an
-> Automations page (`d354220bf`); a full UI redesign (`5a3fc6b84`); the
-> `Internal` suffix on unexported Go helpers was dropped tree-wide; plus a
-> configurable default admin (`71712511f`), a blocking GitOps admission gate
-> instead of coalescing, and the usual dependency and Crowdin churn.
+> This rebase carried **100 upstream commits** (releases 3.0.0 → 3.1.1).
+> Themes: a new **`bidirectional` GitOps sync mode** (pull and push, with the
+> sync table, form and project page all branching on it) and pulling Git backup
+> changes into linked projects (`307e0d68d`, which added a `pull *PullRequest`
+> parameter to `syncProjectDirectory`); Playwright E2E moved onto the
+> **vite-plus test runner** (`26cefebba`: `vp -C tests test run`,
+> `E2E_BASE_URL`, `playwright/package.json`, `test_projects` matrix column);
+> new **Crowdin upload/download workflows** (`79c61a2b6`); LDAP login, project
+> copy/move between environments, vulnerability-gated image updates, agent
+> readiness leases, migrations `00114`–`00117`; plus dependency and Crowdin
+> churn.
 >
-> **Outcome: twelve entries stay active, none was dropped outright, one
-> bullet of #10 went upstream, and two entries (#7, #8) were redesigned.**
+> **Outcome: all twelve entries stay active, none superseded; one new fork
+> change (Crowdin gating, folded into #3).** Conflicts and resolutions:
 >
-> 1. **#7 no longer ships a numbered migration.** Upstream's Go-migration
->    baseline made the old `095_*.sql` file meaningless, and `00095` is now
->    upstream's own (`drop_retired_schedule_defaults`). Rather than claim
->    `00114` and collide again next cycle (upstream added 19 migrations in
->    three weeks), the `inject_commit_env` column is now added idempotently
->    **after** the Goose run (`backend/internal/database/fork_schema.go`), so
->    the fork never again claims a Goose version. **Flagged for review.**
-> 2. **#8 was rewritten from scratch.** The nine-era repair replayed old SQL
->    migration files that no longer exist, so it could not be carried. The new
->    repair handles the one shape a lab database built from the previous fork
->    `main` can have (fork column recorded as version `95`): it replays
->    upstream's `00095` statement before Goose runs. Any **older** fork
->    bookkeeping (column present, `95` unrecorded) is **refused with an
->    explicit error** telling the operator to start the last v2 fork build
->    (`0950664`) once first. **Flagged for review.**
-> 3. **#10 lost its watcher half.** Upstream's tripwire watcher is configured
->    with `SkipDir: projects.IsIgnoredProjectDirName` (= scratch + snapshot
->    dirs), which is exactly the fork's exclusion — superseded by `f6aad8689`.
->    The unreadable-directory WARN→DEBUG demotion cannot be re-applied at the
->    source any more: the log line is inside the external tripwire module
->    (`tree.go`, "tripwire: skipping unreadable directory"), and the entry's own
->    rule is to fix at the source rather than filter logs. Dropped and
->    **flagged**: it now needs an upstream tripwire change. The admin-user half
->    was re-derived onto the configurable username and **no longer returns
->    early** when the admin account is missing, because upstream's
->    `ReconcileDefaultAdminAPIKey` now deletes stale managed keys of previous
->    owners in that case.
-> 4. **#11's detach now waits for an in-flight sync instead of returning 409.**
->    Upstream's entity-jobs registry only exposes a blocking `Acquire`; the
->    detach follows `DeleteSync` (acquire with `defaultGitSyncTimeout`, hold the
->    lease across the release). The invariant — never release while a run holds
->    the binding — is unchanged; the test asserts the wait. Route is now
->    `POST /agents/{id}/gitops/syncs/{syncId}/detach`, edge command list moved to
->    `backend/pkg/agent/commands.go`.
-> 5. **#12 was re-homed** onto `internal/scheduler/auto_heal_job.go`, the new
->    Automations settings page and `default:` struct tags; upstream deleted
->    `internal/dashboard/service.go` (its fallback summaries consumer is gone)
->    and the `types/settings` Update DTO. Upstream's new `ignoreOptOuts`
->    (manual updates bypass settings exclusions) is honored by the fork's filter
->    in both used-image collection paths. Re-greps clean: the only
->    `ExcludedContainerNameSet` / `ContainerNameExcluded` callers are in
->    `container_filter.go`, and `UpdaterService.ExcludedContainers` is still the
->    only `SettingsProvider` port implementation.
-> 6. **#3, #4, #5, #6** re-applied onto moved files (`ci.yml` re-derived from
->    upstream's new cache steps / `taiki-e/install-action` / dropped `types`
->    matrix; sync table at `routes/(app)/gitops/components/sync-table.svelte`;
->    copy button's tooltip fallback still upstream). **#9** replayed clean and
->    its re-grep found no new `nginx` pull site.
+> 1. **#3 `ci.yml`** — upstream's runner rewrite of the E2E job conflicted with
+>    the fork's runner/prefetch hunks. Took upstream's new run step, matrix
+>    rename and pins, kept `ubuntu-latest`, the change-#9 retrying prefetch (its
+>    version probe now reads `playwright/package.json`, as upstream's does) and
+>    the deletion of `cli-e2e-tests`. Upstream also dropped the
+>    `if: github.head_ref != 'l10n_crowdin'` guard; the fork follows.
+> 2. **#3 new: Crowdin workflows gated.** `crowdin-upload.yml` runs on a push to
+>    `main` touching `frontend/messages/en.json` (fork changes do) and
+>    `crowdin-download.yml` on a weekly schedule; both need depot runners and
+>    upstream's Crowdin secrets. Each job now carries
+>    `if: github.repository == 'getarcaneapp/arcane'` (upstream's own guard in
+>    `release.yml`). Separate commit.
+> 3. **#1 README** — upstream added a `> [!NOTE]` v3 notice at the top; the fork
+>    banner goes first, then upstream's NOTE and IMPORTANT notices.
+> 4. **#4 sync table** — upstream's bidirectional mode replaced
+>    `canRunBackup`/`isBackup` gating with `canRunPush`/`pushesToGit` and added
+>    `successMessage(sync, message)`. Re-applied `syncingIds` in both action rows
+>    and the status column (spinner ahead of upstream's `pushesToGit` badge); the
+>    success toast now uses `successMessage`, adding the server message as a
+>    description except for bidirectional (whose title already is the message).
+> 5. **#7 commit injection** — `syncProjectDirectory` now takes both upstream's
+>    `pull` and the fork's `commitHash`. The new pull path (backup/bidirectional
+>    pulls) passes `""`, so it never injects; the deploy `SyncDirectory` path
+>    passes `source.commitHash` as before. The form's "Inject commit" switch is
+>    hidden in bidirectional mode, because upstream's
+>    `buildBidirectionalPayload` never submits it. **Flagged:** the backend
+>    still accepts `injectCommitEnv: true` on a bidirectional sync (it only
+>    rejects it on backup); it is stored but has no effect. Decide whether to
+>    reject it in validation or support injection for bidirectional pulls.
+> 6. **#9** — one nginx conflict in `tests/spec/projects.spec.ts` (upstream
+>    reformatted the service-port spec); re-grep shows all six pull sites on the
+>    mirror and `TEST_IMAGE_REFS.nginx` still deliberately on ECR.
+> 7. **#11 detach** — project page: upstream replaced `isGitOpsManaged` with
+>    `gitOwnsFiles`/`gitSyncsBothWays`; the fork's `canDetachFromGit` sits beside
+>    them and the button stays in the `gitOwnsFiles` (deploy) banner only, so
+>    bidirectional projects get no "Convert" button. **Flagged** for a decision
+>    on whether detach should be offered for bidirectional syncs. Test files
+>    were add/add conflicts at EOF; both sides kept.
+> 8. **#12 auto-heal** — upstream added a hook/job-run label skip in
+>    `filterCandidates`; kept it and swapped the fork's
+>    `containerFilter.excludes` in for the map lookup. Re-greps clean: only
+>    `container_filter.go` calls `ExcludedContainerNameSet` /
+>    `ContainerNameExcluded`, `UpdaterService.ExcludedContainers` is still the
+>    only `SettingsProvider` port, no new reader of either CSV.
+> 9. **#8** — upstream's `00095` body unchanged; no new migration rebuilds
+>    `gitops_syncs` (`00114`–`00117` checked).
+> 10. #2, #5, #6, #10 replayed clean; their redundancy checks still hold
+>     (upstream's copy button still renders the `isSecure` tooltip fallback,
+>     its apikey lines still WARN).
 >
 > **Undocumented changes:** none — every file the previous fork diff touched is
 > named by an entry.
 >
 > Verified post-rebase: `go build`/`go vet -tags exclude_frontend ./...`
-> (backend) and `go build`/`go vet` (cli, types) clean; the **full**
-> `go test -tags exclude_frontend ./...` in `backend/` passes (129 packages, 0
-> failures, with `GITHUB_TOKEN` unset); `golangci-lint` 2.15.0 (built with
-> go1.27.4) reports 0 issues in `backend`, `cli` and `types`, and
-> `golangci-lint fmt --diff` is clean; `vp -C frontend run build`,
-> `vp -C frontend run check` (0 errors, 0 warnings) and
-> `vp -C frontend run lint` pass; `vp fmt --check .` is clean except for
-> upstream's own `tests/spec/permissions.spec.ts`, which the fork does not
-> touch. E2E was not run (no Docker daemon in the rebase container).
+> (backend) and `go build`/`go vet` (cli, types) clean; the full
+> `go test -tags exclude_frontend ./...` in `backend/` passes (131 packages, 0
+> failures, `GITHUB_TOKEN` unset), `go test ./...` passes in `cli` and `types`;
+> `golangci-lint` 2.15.0 (built with go1.27.4) reports 0 issues in `backend`,
+> `cli` and `types`, and `golangci-lint fmt --diff` is clean;
+> `vp -C frontend run build`, `vp -C frontend run check` (0 errors, 0 warnings),
+> `vp -C frontend run lint` and `vp fmt --check .` pass. E2E was not run (no
+> Docker daemon in the rebase container). Tooling note: the container ships
+> Node 22, so `vp` was installed with the official installer
+> (`VP_VERSION=1.7.0 VP_NODE_MANAGER=yes`), which supplies Node 26.
 
 ---
 
@@ -264,7 +262,8 @@ When you rebase, work through every entry below. For each one:
 ### 3. CI/workflows adapted for this fork
 
 - **Files:** `.github/workflows/ci.yml`, `.github/workflows/build-next-images.yml`,
-  `.github/workflows/publish-to-main.yml`
+  `.github/workflows/publish-to-main.yml`, `.github/workflows/crowdin-download.yml`,
+  `.github/workflows/crowdin-upload.yml`
 - **Intent:** Make CI run on a fork without upstream-only
   infrastructure:
   - Run on the `main` branch (CI on push/PR; next images on push to
@@ -395,6 +394,14 @@ When you rebase, work through every entry below. For each one:
   in `e2e-tests`, `docker/setup-buildx-action@v4`, the change-#9 pull-with-retry
   block, and no `cli-e2e-tests` job. `build-next-images.yml` replayed clean; its
   `docker/Dockerfile` and `docker/Dockerfile-agent` still exist.
+- **At the `204ad2faa` rebase** `ci.yml` took upstream's vite-plus test
+  runner (`vp -C tests test run`, `E2E_BASE_URL`, `test_projects`) and pins; the
+  prefetch's version probe reads `playwright/package.json`. Upstream's new
+  Crowdin workflows are gated per job with
+  `if: github.repository == 'getarcaneapp/arcane'` (they need depot runners and
+  upstream's Crowdin secrets; upload would fire on every fork `en.json` change).
+  Keep that one-line guard rather than deleting the files, so upstream edits to
+  them still replay. Drop the guard if the fork ever gets its own Crowdin project.
 - **Publish workflow (added 2026-11-14, owner's request):**
   `publish-to-main.yml` force-pushes a branch onto `main`. It runs on a push to
   `publish-to-main` (the file comes from the pushed commit, so it works before
@@ -451,6 +458,11 @@ When you rebase, work through every entry below. For each one:
   overlapping run into `success=false`, so the premise in "Why" is weaker — the
   warning branch now fires only when a run reports `success=false` itself. The
   per-row spinner and the honest toast are still worth keeping.
+
+- **At the `204ad2faa` rebase** upstream's bidirectional mode moved the action
+  rows onto `canRunPush`/`pushesToGit` and toasts onto `successMessage(sync,
+  message)`; `syncingIds` and the `result.success` branch were re-applied onto
+  them.
 
 ### 5. Short commit hash display with full hash on hover
 
@@ -570,6 +582,13 @@ When you rebase, work through every entry below. For each one:
 - **Redundancy check:** Upstream's `5512cc357` added user-supplied per-sync env
   variables, not commit metadata; upstream still injects nothing about the
   commit — **keep**.
+
+- **At the `204ad2faa` rebase** `syncProjectDirectory` gained upstream's
+  `pull *PullRequest` parameter; the fork's `commitHash` follows it. The pull
+  path (backup/bidirectional) passes `""` and never injects. The form hides the
+  switch in bidirectional mode (upstream's bidirectional payload never sends it).
+  **Open question:** backend validation still accepts the flag on a
+  bidirectional sync, where it is stored but inert.
 
 ### 8. One-time repair for databases migrated by a fork build that recorded the fork migration as Goose `95`
 
@@ -870,6 +889,11 @@ When you rebase, work through every entry below. For each one:
   `frontend/src/lib/services/gitops-sync-service.ts`,
   `frontend/src/routes/(app)/projects/[projectId]/+page.svelte`,
   `frontend/messages/en.json`.
+
+- **At the `204ad2faa` rebase** the project page's `isGitOpsManaged` became
+  upstream's `gitOwnsFiles`/`gitSyncsBothWays`; the button stays in the
+  `gitOwnsFiles` banner, so bidirectional projects have no convert action.
+  **Open question:** whether to offer detach for bidirectional syncs.
 
 ### 12. Include-mode switch for automation container lists
 

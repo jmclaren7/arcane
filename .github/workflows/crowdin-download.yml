@@ -22,6 +22,8 @@ permissions:
 
 jobs:
   download:
+    # Upstream-only: needs upstream's Crowdin project, secrets and depot runners.
+    if: github.repository == 'getarcaneapp/arcane'
     runs-on: depot-ubuntu-latest
     concurrency:
       group: crowdin-download

@@ -17,6 +17,8 @@ concurrency:
 
 jobs:
   upload:
+    # Upstream-only: needs upstream's Crowdin project, secrets and depot runners.
+    if: github.repository == 'getarcaneapp/arcane'
     runs-on: depot-ubuntu-latest
 
     steps:
